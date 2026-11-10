@@ -1,0 +1,33 @@
+# M0 spike (c): vLLM (from databricks_ai_v6) serving Nemotron Nano 12B v2 VL + image request.
+experiment_name: nemotron-spike-nano-vl-vllm
+
+environment:
+  version: databricks_ai_v6
+
+compute:
+  accelerator_type: GPU_1xH100
+  num_accelerators: 1
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - src
+      - recipes/spikes/nano_vl_vllm
+
+env_variables:
+  # FlashInfer's sampler JIT needs curand.h, which the AIR image lacks (same workaround as the cookbook Qwen recipe).
+  VLLM_USE_FLASHINFER_SAMPLER: "0"
+
+max_retries: 0
+timeout_minutes: 45
+
+command: |
+  cd "$CODE_SOURCE_PATH"
+  df -h | grep -v -E "overlay|tmpfs|shm" ; df -h /tmp /databricks 2>/dev/null
+  for d in $(df --output=avail,target -B1 | tail -n +2 | sort -rn | awk '{print $2}' | grep -v -E '^/(Volumes|Workspace|dbfs|proc|sys|dev)'); do
+    if mkdir -p "$d/nemotron-scratch" 2>/dev/null && touch "$d/nemotron-scratch/.w" 2>/dev/null; then export SCRATCH_DIR="$d/nemotron-scratch"; break; fi
+  done
+  echo "SCRATCH_DIR=$SCRATCH_DIR"; export HF_HOME="$SCRATCH_DIR/hf"
+  python recipes/spikes/nano_vl_vllm/probe_vllm.py

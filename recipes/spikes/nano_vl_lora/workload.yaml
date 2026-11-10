@@ -1,0 +1,27 @@
+# M0 spike (e): 10 LoRA steps on Nano 12B v2 VL with HF remote code + PEFT (ai_v6 transformers, then 4.53.3).
+experiment_name: nemotron-spike-nano-vl-lora
+
+environment:
+  version: databricks_ai_v6
+
+compute:
+  accelerator_type: GPU_1xH100
+  num_accelerators: 1
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - src
+      - recipes/spikes/nano_vl_lora
+
+env_variables:
+  HF_HOME: /local_disk0/hf
+
+max_retries: 0
+timeout_minutes: 60
+
+command: |
+  cd "$CODE_SOURCE_PATH"
+  bash recipes/spikes/nano_vl_lora/run.sh

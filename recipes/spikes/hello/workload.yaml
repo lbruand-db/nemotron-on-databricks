@@ -1,0 +1,27 @@
+# M0 spike: AIR availability, shared-code shipping from the repo root, GPU, Volume write.
+# Run from the repo root: databricks air run -f recipes/spikes/hello/workload.yaml --watch
+experiment_name: nemotron-spike-hello
+
+compute:
+  accelerator_type: GPU_1xA10
+  num_accelerators: 1
+
+code_source:
+  type: snapshot
+  snapshot:
+    # Resolved relative to this YAML's directory -> repo root (OQ-1b).
+    root_path: ../../..
+    include_paths:
+      - src
+      - recipes/spikes/hello
+
+env_variables:
+  OUTPUT_ROOT: /Volumes/am_rag_fevm_catalog/nemotron/artifacts/spikes/hello
+
+max_retries: 0
+timeout_minutes: 20
+
+command: |
+  cd "$CODE_SOURCE_PATH"
+  export PYTHONPATH="$CODE_SOURCE_PATH/src:${PYTHONPATH:-}"
+  python recipes/spikes/hello/probe.py
