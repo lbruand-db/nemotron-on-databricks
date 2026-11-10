@@ -17,6 +17,10 @@ code_source:
       - recipes/spikes/nano_vl_lora
 
 env_variables:
+  PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+  CAUSAL_CONV1D_VERSION: "1.6.2.post1"
+  MAMBA_SSM_VERSION: "2.3.2.post1"
+  WHEEL_CACHE: /Volumes/am_rag_fevm_catalog/nemotron/artifacts/wheels
   HF_HOME: /local_disk0/hf
 
 max_retries: 0

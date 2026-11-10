@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | **Draft v0.2** — decisions OQ-1, OQ-8 resolved; target workspace set |
+| Status | **Draft v0.3**: M0 spikes run (§11); no custom images needed; Nano VL trains on 1×H100 |
 | Date | 2026-11-10 |
 | Owner | lbruand-db |
 | Scope | Fine-tune **and** serve 5 NVIDIA Nemotron document-intelligence models on Databricks (AI Runtime + Model Serving) |
@@ -15,6 +15,9 @@
 | 2026-11-10 | **No upstreaming to `ai-runtime-cookbook` for now.** Recipes keep the cookbook *style*, but they share code through a common package in this repo (resolves OQ-1). |
 | 2026-11-10 | **No `€`/`£` support for now.** The OCR charset extension is out of scope (resolves OQ-8). |
 | 2026-11-10 | Spikes and end-to-end validation run on the FEVM workspace `fevm-am-rag-fevm`. |
+| 2026-11-10 | **All workloads use the stock `databricks_ai_v6` environment; no custom Docker images.** The OCR extension and `causal-conv1d` are compiled on AIR and cached as wheels on the Volume (§11). `docker/` is kept only as a documented fallback. |
+| 2026-11-10 | **Nano VL fine-tuning uses AIR's transformers 5.8.1** (not the model card's 4.53 pin), plus the compatibility patches in §11.3. One environment then serves training, vLLM eval, and serving (vLLM 0.24 requires transformers ≥ 5.5.3). Default compute is **`GPU_1xH100`**. |
+| 2026-11-10 | Storage on `fevm-am-rag-fevm`: `am_rag_fevm_catalog.nemotron` schema, `artifacts` managed volume (there is no `main` catalog). |
 
 ---
 
@@ -45,7 +48,7 @@ All five are licensed under the **NVIDIA Open Model License** (commercial use al
 
 - Running **NIM containers** on Databricks. Model Serving does not host arbitrary containers, and NIM needs an NVIDIA AI Enterprise entitlement. We may mention NIM as the alternative for production deployments outside Databricks.
 - Production-scale training. Each recipe is a **small, cheap integration example** (minutes, not hours), in line with cookbook norms.
-- Re-training from scratch, or changing an architecture beyond what fine-tuning needs (one exception is described in §6.4.3).
+- Re-training from scratch, or changing any architecture (the OCR charset extension was ruled out; see §6.4.3).
 - A full RAG / ingestion product. An optional pipeline demo appears in §7, but it is not on the critical path.
 
 ---
@@ -96,12 +99,12 @@ nemotron-on-databricks/
 │   ├── detection/                     #   COCO conversion, mAP eval, detector pyfunc (§5.3), NIM-like response formatting
 │   ├── ocr/                           #   CTC recognizer fine-tune, CER/WER eval, OCR pyfunc
 │   ├── vlm/                           #   CORD prompt/target formatting, LoRA train loop, merge, field-F1/TED eval
+│   │   └── compat.py                  #   Nano VL remote-code patches for transformers 5 (§11.3)
 │   ├── lifecycle/                     #   register_model (smoke test + log + UC register), deploy_endpoint (idempotent), query client
-│   └── common/                        #   paths, MLflow run helpers, rank-safe IO, HF revision pinning
+│   └── common/                        #   paths, MLflow run helpers, rank-safe IO, HF revision pinning,
+│                                      #   wheel cache (build-once CUDA extensions on the Volume, §11.2)
 ├── tests/                             # unit tests: label mapping, loss shapes, metrics, pyfunc I/O contract (CPU-only)
-├── docker/                            # custom AIR images
-│   ├── ocr/Dockerfile                 #   nemotron-ocr C++/CUDA extension build
-│   └── nano-vl/Dockerfile             #   transformers 4.53.x + mamba-ssm + causal_conv1d + peft
+├── docker/                            # FALLBACK ONLY (not used by default): custom AIR images if ai_v6 stops working
 └── recipes/
     ├── page-elements-v3/
     ├── table-structure-v1/
@@ -123,7 +126,8 @@ recipes/<model>/
 
 ### 4.1 Shipping shared code to workloads
 
-- **AIR training:** `workload.yaml` sets `code_source.root_path` to the **repo root**, with `include_paths: [src/, recipes/<model>/]`. The command runs `pip install --no-deps -e "$CODE_SOURCE_PATH"` (or sets `PYTHONPATH="$CODE_SOURCE_PATH/src"`) and then `python recipes/<model>/train.py`. Workloads are launched from the repo root: `databricks air run -f recipes/<model>/workload.yaml`. *Verify in M0 that `root_path` may point above the YAML's directory. Fallback: put the `workload.yaml` files at repo root as `workloads/<model>.yaml`.*
+- **AIR training:** `workload.yaml` sets `code_source.snapshot.root_path: ../..` (resolved relative to the YAML, so this is the repo root), with `include_paths: [src, recipes/<model>]`. The command sets `PYTHONPATH="$CODE_SOURCE_PATH/src"` and runs `python recipes/<model>/train.py`. **Verified in M0 (spike a):** the snapshot extracts to `/databricks/code_source/nemotron-on-databricks/` and `import nemotron_dbx` works.
+  - Every workload must set `environment.version: databricks_ai_v6`. Without it, the default image has **no torch**.
 - **Registration jobs (DAB):** the bundle syncs `src/`. Notebooks add it to `sys.path`, or the bundle builds a wheel artifact (`artifacts:` → `python_wheel`) that the job environment installs.
 - **Serving:** each pyfunc is logged with `code_paths=["src/nemotron_dbx"]`, so endpoints never depend on the repo at runtime.
 
@@ -135,11 +139,12 @@ recipes/<model>/
 
 | Item | Convention |
 |---|---|
-| Volume root | `/Volumes/<catalog>/<schema>/<volume>/<recipe-name>`, default `/Volumes/main/default/air_examples/<recipe-name>`; set per workspace (OQ-14) |
+| Volume root | `/Volumes/<catalog>/<schema>/<volume>/<recipe-name>`. On `fevm-am-rag-fevm`: `/Volumes/am_rag_fevm_catalog/nemotron/artifacts/<recipe-name>` |
 | Training outputs | `<root>/<MLFLOW_RUN_ID>/{weights|merged|adapter}/` + `metrics.json` |
 | Dataset cache | `<root>/data/<dataset>@<revision>/`, so it can be reused across runs (stable ID, not the run ID) |
-| HF cache | `HF_HOME=/local_disk0/hf` (node-local) |
-| UC model | `${catalog}.${schema}.nemotron_<model>_ft`, e.g. `main.default.nemotron_page_elements_v3_ft` |
+| Wheel cache | `/Volumes/<catalog>/<schema>/<volume>/wheels/<package>/<torch-version>/*.whl`: CUDA extensions are built once and reused (§11.2) |
+| Node-local scratch / HF cache | `/tmp` is the node's local disk (3.5 TB on 1×H100 and 1×A10 nodes). `/local_disk0` does **not** exist by default. Use `HF_HOME=/tmp/hf`. |
+| UC model | `${catalog}.${schema}.nemotron_<model>_ft`, e.g. `am_rag_fevm_catalog.nemotron.nemotron_page_elements_v3_ft` |
 | Endpoint | `nemotron-<model>-ft` |
 | MLflow | Log into the AIR-provided `MLFLOW_RUN_ID`. Tag `merged_model_path` / `weights_path` so registration can resolve the artifacts. |
 
@@ -181,7 +186,11 @@ OCR adds `text` per box, plus `reading_order` when the relational model is enabl
 
 ### 5.4 Serving for Nano VL (model 5)
 
-The model is served through **Custom LLM Serving**, the cookbook pattern: a pyfunc placeholder whose `metadata.entrypoint` starts `vllm.entrypoints.openai.api_server`, with `task: llm/v1/chat`. The endpoint uses the OpenAI-compatible chat format with `image_url` (base64 data URL) content parts. Multimodal support on Custom LLM Serving must be verified (OQ-5).
+The model is served through **Custom LLM Serving**, the cookbook pattern: a pyfunc placeholder whose `metadata.entrypoint` starts `vllm.entrypoints.openai.api_server` on `0.0.0.0:8080`, with `task: llm/v1/chat`. According to the Custom LLM Serving docs, vision-language models use the same `llm/v1/chat` task. The endpoint uses the OpenAI-compatible chat format with `image_url` (base64 data URL) content parts.
+
+- On AIR, vLLM 0.24 (ai_v6) serves Nano VL with image requests (§11.1, spike c).
+- Still to verify: the same request through a deployed endpoint (OQ-5).
+- The entrypoint must set `VLLM_USE_FLASHINFER_SAMPLER=0`.
 
 ---
 
@@ -247,9 +256,10 @@ The model has three jointly trained components: a detector (45 M), a recognizer 
 
 #### 6.4.4 Build and environment
 
-- Python 3.12, CUDA 12.8, and a **C++/CUDA extension** (`nemotron_ocr_cpp`, built with hatchling and needing GCC with C++17, CUDA headers, and OpenMP).
-- A **custom AIR image** is built from a `Dockerfile` (base `nvcr.io/nvidia/pytorch:25.xx-py3`, matching the repo's own Dockerfile). It contains the pinned HF repo revision and a prebuilt wheel, and is pushed with `databricks air images push` (the Super VL recipe pattern).
-- For serving, the **prebuilt wheel** is shipped as an MLflow artifact and installed via `extra_pip_requirements` (local wheel path). The alternative is `env_pack`. The wheel must be ABI-compatible with the serving image (OQ-9).
+- Python 3.12 and a **C++/CUDA extension** (`nemotron_ocr_cpp`, built with hatchling and needing GCC with C++17, CUDA headers, and OpenMP). Only core CUDA headers are needed (`cuda_runtime`, thrust, cooperative_groups; `trove` is vendored).
+- **No custom image** (spike d). In `databricks_ai_v6` (nvcc 13.0, gcc 13.3), `pip wheel --no-build-isolation` with `TORCH_CUDA_ARCH_LIST="7.5;8.6;8.9;9.0+PTX"` builds a 36 MB wheel in **254 s on 1×A10**. The wheel is cached on the Volume and installed with `--no-deps`. `shapely` may need installing.
+- For serving, the **cached wheel** is shipped as an MLflow artifact and installed via `extra_pip_requirements` (local wheel path); `env_pack` is the alternative. Whether it loads in the serving image is still OQ-9.
+- **Output quirk:** in the pipeline output, `upper` > `lower` (the y-axis is flipped). The pyfunc normalizes boxes to `y_min ≤ y_max`.
 
 #### 6.4.5 Compute, eval, serving
 
@@ -265,28 +275,34 @@ The model has three jointly trained components: a detector (45 M), a recognizer 
 
 #### 6.5.1 Fine-tune framework decision
 
-NeMo AutoModel has no Nano v2 VL recipe, and Megatron-Bridge has removed support. **Decision: Hugging Face `transformers` + `peft` LoRA with a minimal custom training loop** (or HF `Trainer`), loading the model with `trust_remote_code=True`.
+NeMo AutoModel has no Nano v2 VL recipe, and Megatron-Bridge has removed support. **Decision: Hugging Face `transformers` + `peft` LoRA with a minimal custom training loop**, loading the model with `trust_remote_code=True`. **Validated in M0 (spike e).**
 
-- Pinned versions, following the model card: `transformers>4.53,<4.54`, `mamba-ssm==2.2.5`, `causal_conv1d`, `timm`, `open_clip_torch`, plus `peft` and `accelerate`.
-- These need compiled CUDA kernels (Mamba), so the recipe uses a **custom AIR image** (`Dockerfile`), pushed to UC.
-- Fallback: the frozen Megatron-Bridge 0.4.2 container, documented only (OQ-10).
+- **Environment:** stock `databricks_ai_v6` (torch 2.11+cu130, **transformers 5.8.1**, peft 0.19.1). On top of it:
+  - `mamba-ssm==2.3.2.post1`, installed with `MAMBA_SKIP_CUDA_BUILD=TRUE --no-deps` (Triton ops only).
+  - `causal-conv1d==1.6.2.post1`, CUDA build, wheel cached on the Volume.
+  - `einops`, `timm`, `open_clip_torch`, `ftfy`, `regex`.
+  - The compatibility patches in §11.3.
+- **No custom image.** The model card's `transformers<4.54` pin is **not** used. The model also loads under 4.53.3, but vLLM 0.24 requires transformers ≥ 5.5.3, so a 4.53 environment could not run eval or serving.
+- Fallback (documented only): the frozen Megatron-Bridge 0.4.2 container.
 
 #### 6.5.2 Training setup
 
 | | |
 |---|---|
 | **Dataset** | **CORD-v2** receipts → JSON key-information extraction (menu items, prices, totals). This is the same task as the Super VL cookbook recipe, so the two models can be compared. The prompt uses the system message `/no_think` and a fixed extraction instruction, with the target being canonical JSON of `gt_parse`. |
-| **LoRA targets** | LLM attention `q,k,v,o` and MLP `up,down` projections (plus Mamba `in_proj,out_proj` as an option, OQ-11). Rank 32, α 64, dropout 0.05. The **vision encoder (RADIO) and projector are frozen**. |
-| **Precision / memory** | bf16 weights (~25 GB), gradient checkpointing, max seq len 4096, ≤ 12 tiles of 512² per image |
-| **Compute** | Single node. Default `GPU_8xH100` with DDP, ~15 min target. A 1×H100 or A100-80GB variant is documented if the accelerator type exists in AIR (OQ-12). |
+| **LoRA targets** | LLM attention `q,k,v,o`, MLP `up,down`, **and Mamba `in_proj,out_proj`**: 90.8 M trainable params at r=32. Rank 32, α 64, dropout 0.05. The **vision encoder (RADIO) and projector (`mlp1`) are frozen** (`exclude_modules`). Attention uses `attn_implementation="eager"`; only 6 of the 62 layers are attention layers. |
+| **Precision / memory** | bf16 weights (~25 GB), non-reentrant gradient checkpointing, max seq len 4096, ≤ 12 tiles of 512² per image. **Measured peak: 34.6 GB** at ≤ 3.5k tokens / 13 tiles, batch 1. |
+| **Compute** | **`GPU_1xH100`** by default. Measured ~1.1–2 s/step at batch 1; the first step takes ~78 s for Triton JIT warm-up. `GPU_8xH100` + DDP is an optional speed-up. |
 | **Hyper-params** | lr 1e-4, cosine, 1–2 epochs over 800 train receipts, global batch 16 |
 | **Eval** | **Field-level F1 and normalized tree-edit-distance accuracy** (the Donut/CORD standard) on CORD-v2 test (100), plus JSON validity rate. Base vs fine-tuned are both run with **vLLM batch inference**, so the eval measures the serving path. |
 | **Artifacts** | `adapter/`, plus a **merged HF checkpoint** in `merged/`. The merged directory must contain all remote-code files (`modeling*.py`, `configuration*.py`, `processing*.py`, `image_processing.py`, chat templates, `evs.py`, `video_io.py`), copied from the pinned base revision. |
 
 #### 6.5.3 Serving
 
-- **Stage 2:** start `vllm serve <merged> --trust-remote-code --dtype bfloat16 --video-pruning-rate 0 --max-model-len 16384` locally on an AIR GPU task, send one image request as a smoke test, then register as a Custom LLM Serving model (§5.4). The vLLM version must support `NemotronH_Nano_VL_V2`; the minimum version is to be pinned.
-- **Workload:** 12.6 B bf16 needs ≥ 40 GB GPU memory. Use `GPU_LARGE` (A100-80GB) or an H100 class if offered.
+- **Stage 2:** start `VLLM_USE_FLASHINFER_SAMPLER=0 vllm serve <merged> --trust-remote-code --dtype bfloat16 --video-pruning-rate 0 --max-model-len 16384` locally on an AIR GPU task, send one image request as a smoke test, then register as a Custom LLM Serving model (§5.4).
+  - vLLM **0.24.0** (ai_v6) resolves `NemotronH_Nano_VL_V2` natively (spike c).
+  - Startup takes 230 s including the 25 GB download. A CORD receipt takes 1.1–2.7 s (1.8k–3.4k prompt tokens) on 1×H100.
+- **Workload:** 12.6 B bf16 is ~25 GB of weights. On AWS, `GPU_LARGE` is an **L40S 48 GB** (per the Custom LLM Serving docs), which should fit with a reduced `--max-model-len`. `GPU_XLARGE` (H100 80 GB, restricted availability) is the preferred choice if it's enabled. To verify on the workspace (OQ-5).
 - **Optional:** serve **FP8**, using `--quantization modelopt` from the NVIDIA FP8 checkpoint. That checkpoint has no LoRA, so FP8 + fine-tune would need post-merge ModelOpt PTQ (stretch).
 - **Alternative: no merge.** Serve the base model with `--enable-lora` and the adapter, if Custom LLM Serving allows passing adapter artifacts (stretch).
 - **Client:** `query_endpoint.py` sends an OpenAI-format chat request with an `image_url` data URL.
@@ -337,19 +353,20 @@ Repo-level:
 | ID | Question / risk | Default until resolved |
 |---|---|---|
 | ~~OQ-1~~ | ~~Duplicate YOLOX code per recipe vs. a shared package~~ | **Resolved:** shared `src/nemotron_dbx` package, no upstreaming |
-| OQ-1b | Can AIR `code_source.root_path` point at the repo root, above the `workload.yaml` directory? | Verify in M0; fallback is root-level `workloads/*.yaml` |
+| ~~OQ-1b~~ | ~~Can AIR `code_source.root_path` point at the repo root?~~ | **Resolved (spike a):** yes, `snapshot.root_path: ../..` + `include_paths` |
 | OQ-2 | DocLayNet `Picture` is ambiguous for chart vs infographic. Drop those pages, add ignore regions, or relabel a subset? | Drop pages |
 | OQ-3 | Do PubTables-derived "cells" match NVIDIA's `cell` semantics (empty cells, spanning cells)? | Validate visually on 50 tables before training |
 | OQ-4 | Real-chart test set for graphic-elements: which license-clean source? | Small hand-labeled set or PMC subset if license OK |
-| OQ-5 | Does Custom LLM Serving accept **multimodal** (`image_url`) chat requests end-to-end, and which GPU workload types does it offer for a 12 B model? | Verify with a product contact early; fallback is a pyfunc wrapping `transformers.generate` |
+| OQ-5 | Does Custom LLM Serving accept **multimodal** (`image_url`) chat requests end-to-end, and which GPU workload types are enabled on the workspace for a 12 B model? | **Partly resolved:** the docs say VLMs use `llm/v1/chat`, and vLLM 0.24 on AIR serves Nano VL with images (spike c). Remaining: deploy a real endpoint (L40S `GPU_LARGE` vs `GPU_XLARGE`). |
 | OQ-6 | Exact NIM response schemas for page-elements, table-structure, graphic-elements, and OCR, to mirror field names | Mirror best-effort, document differences |
 | OQ-7 | OCR detector/relational fine-tuning needs loss code not shipped in the HF repo | v1 = recognizer only |
 | ~~OQ-8~~ | ~~OCR charset lacks `€`/`£`~~ | **Resolved:** not needed for now; report the out-of-charset rate only |
-| OQ-9 | Will the C++/CUDA OCR extension built on AIR load in the Model Serving GPU image (CUDA, glibc, Python 3.12 ABI)? | Spike in week 1; fallback is CPU-only grid-sample path if available |
-| OQ-10 | Nano VL LoRA through HF remote code: are training kernels (Mamba) stable with PEFT and gradient checkpointing under `transformers 4.53.x`? | Spike in week 1; fallback Megatron-Bridge 0.4.2 container |
-| OQ-11 | Include Mamba projections in LoRA targets? | Attention + MLP only; Mamba as ablation |
-| OQ-12 | Which AIR accelerator types and serving GPU workload types are available on **`fevm-am-rag-fevm`**? Are AIR, the custom Docker image preview, and Custom LLM Serving enabled there? | `GPU_1xA10` for small models, `GPU_8xH100` for Nano VL; check in M0 |
-| OQ-14 | FEVM workspace TTL: is it long enough for M0–M5, and which catalog/schema/volume can we write to (`main.default.air_examples` may not exist)? | Check the FEVM deployment; create a project schema and volume if allowed |
+| OQ-9 | Will the C++/CUDA OCR extension built on AIR load in the Model Serving GPU image (CUDA 13 driver, glibc 2.39, Python 3.12 ABI)? | **Partly resolved:** builds and runs on AIR (spike d). Remaining: load test in a real endpoint during M3 (or earlier with a throwaway pyfunc). |
+| ~~OQ-10~~ | ~~Nano VL LoRA through HF remote code + PEFT~~ | **Resolved (spike e):** 10 steps OK on 1×H100 with transformers 5.8.1 + patches (§11.3) |
+| ~~OQ-11~~ | ~~Include Mamba projections in LoRA targets?~~ | **Default changed:** include `in_proj,out_proj` (validated). Attention+MLP-only stays an ablation. |
+| ~~OQ-12~~ | ~~AIR accelerator types / previews on `fevm-am-rag-fevm`~~ | **Resolved:** `GPU_1xA10` and `GPU_1xH100` run (`GPU_8xH100`/`GPU_8xB300` not tried). The Artifact Registry host is configured. The GPU pools API is *not* enabled (not needed). |
+| ~~OQ-14~~ | ~~Workspace TTL and storage~~ | **Resolved:** expires **2026-11-28** (extension may be needed for M4/M5); storage is `am_rag_fevm_catalog.nemotron.artifacts` |
+| OQ-15 | `databricks air run --watch` log streaming can lag far behind the run (spike e finished at 17:38 UTC, the stream ended at 18:17). | Don't rely on `--watch` for completion; check `databricks air get <run-id>` or the job-run page |
 | OQ-13 | Customer data: will the cookbook later be pointed at customer documents (in their own UC volume)? If so, each `prepare_data.py` needs a "bring your own COCO/JSONL" path. | Add a `dataset_source: hf|volume` parameter in v1 |
 
 ---
@@ -358,9 +375,59 @@ Repo-level:
 
 | # | Deliverable | Notes |
 |---|---|---|
-| M0 | This spec reviewed. Spikes on `fevm-am-rag-fevm`, under `recipes/spikes/`: (a) workspace capabilities and storage (OQ-12, OQ-14); (b) `root_path` at repo root (OQ-1b); (c) Nano VL `vllm serve` + image request on Custom LLM Serving (OQ-5); (d) OCR extension build on AIR, then load in serving (OQ-9); (e) Nano VL PEFT LoRA forward/backward, 10 steps (OQ-10). | Highest technical risk first |
-| M1 | `page-elements-v3` end-to-end (train → register → serve) | Establishes the YOLOX training stack and the detector serving contract |
+| M0 ✅ | Spikes on `fevm-am-rag-fevm`, under `recipes/spikes/`: (a) capabilities and storage ✅; (b) repo-root `root_path` ✅; (c) Nano VL vLLM + image on AIR ✅; (d) OCR extension build + inference on AIR ✅; (e) Nano VL PEFT LoRA, 10 steps ✅. See §11. | Carried over to M1/M3/M4: deploy-side halves of OQ-5 and OQ-9 |
+| M1 | `page-elements-v3` end-to-end (train → register → serve). This also produces the first real Model Serving GPU endpoint, which de-risks the serving half of OQ-9 for the CV models. | Establishes the YOLOX training stack and the detector serving contract |
 | M2 | `table-structure-v1` + `graphic-elements-v1` | Reuse `nemotron_dbx.yolox_train` + `detection` from M1 |
 | M3 | `ocr-v1` (recognizer fine-tune, custom image, serving) | |
 | M4 | `nano-12b-v2-vl` LoRA → merged → Custom LLM Serving | |
 | M5 | Top-level README, metrics table, optional pipeline demo (§7) | |
+
+---
+
+## 11. M0 findings (2026-11-10, `fevm-am-rag-fevm`)
+
+All spikes live in `recipes/spikes/` and are launched from the repo root with `databricks air run -f recipes/spikes/<spike>/workload.yaml -p am-rag-fevm`.
+
+### 11.1 Results
+
+| Spike | Compute | Result | Key facts |
+|---|---|---|---|
+| (a) `hello` | 1×A10G, 1×H100 | ✅ | Workloads start in ~15–35 s. Repo-root snapshot works. Volume write works. **The default environment has no torch, so `environment.version: databricks_ai_v6` is required.** ai_v6: Python 3.12.3, torch 2.11.0+cu130, transformers 5.8.1, vLLM 0.24.0, peft 0.19.1, MLflow 3.13.0, flash-attn present. Driver 595.91 / CUDA 13.2. `/tmp` is a 3.5 TB local disk. |
+| (c) `nano_vl_vllm` | 1×H100 | ✅ (3rd attempt) | vLLM 0.24 resolves `NemotronH_Nano_VL_V2` natively. **Needs `VLLM_USE_FLASHINFER_SAMPLER=0`**: FlashInfer's sampler JIT fails on the missing `curand.h`. Startup 230 s incl. download. CORD receipts take 1.1–2.7 s each. The base model reads receipts well but **invents its own JSON schema** (`menu_items`/`quantity` instead of CORD's `nm`/`cnt`/`total_price`), which gives clear headroom for fine-tuning. |
+| (d) `ocr_build` | 1×A10G | ✅ | Extension wheel built in 254 s (nvcc 13.0, gcc 13.3, archs 7.5/8.6/8.9/9.0+PTX), 36 MB. Saved to `…/artifacts/spikes/ocr_build/<run>/`. Model load 2.1 s. First call 9.8 s (warm-up), then **~70–90 ms/page**. Base errors on CORD: `TIICKET` (conf 0.20), `60,000` vs `60.000`, `00.000`. On the NVIDIA example, `£14,389.43` → `f14,389.43` (`£` is not in the charset). Box `upper`/`lower` are flipped. |
+| (e) `nano_vl_lora` | 1×H100 | ✅ (10th attempt) | 10 LoRA steps with **transformers 5.8.1**. Fused Mamba path active. 90.8 M trainable params. **Peak 34.6 GB.** ~1.1–2 s/step (first step 78 s, JIT). Loss 0.98 → 0.69 (noisy, batch 1). The first run includes a **642 s `causal-conv1d` compile**; later runs use the cached wheel. |
+
+### 11.2 Build-once CUDA extensions (wheel cache)
+
+- Both the OCR extension and `causal-conv1d` compile in ai_v6 (nvcc 13.0 is present; `curand.h` is not).
+- The shared helper `nemotron_dbx.common.wheels` will:
+  1. look for `<volume>/wheels/<pkg>/<torch-version>/*.whl`;
+  2. otherwise build with `pip wheel --no-deps --no-build-isolation` and copy the wheel there;
+  3. `pip install --no-deps` it.
+- `causal-conv1d`'s `setup.py` **ignores `TORCH_CUDA_ARCH_LIST`**. It always compiles ~9 archs (sm_75…sm_121), which takes ~11 min and produces a 205 MB wheel. Acceptable as a one-off. To make it faster, patch `cc_flag` to sm_90 only.
+- Upstream prebuilt wheels exist only up to `cu13torch2.10`, and ai_v6 has torch 2.11, so they're not used.
+
+### 11.3 Nano VL remote-code compatibility patches (→ `nemotron_dbx/vlm/compat.py`)
+
+| # | Symptom | Patch |
+|---|---|---|
+| 1 | `ImportError: mamba-ssm is required` (the remote code imports `mamba_ssm.ops.triton.*` unconditionally) | `MAMBA_SKIP_CUDA_BUILD=TRUE pip install --no-deps mamba-ssm==2.3.2.post1` |
+| 2 | `No module named 'selective_scan_cuda'` (`mamba_ssm/__init__.py` eagerly imports the Mamba-1 CUDA extension) | Replace `mamba_ssm/__init__.py` with a version-only stub (Nano VL only uses the Mamba-2 Triton ops) |
+| 3 | ~17 GiB allocation per Mamba layer → OOM in backward (torch fallback path) | Install the `causal-conv1d==1.6.2.post1` CUDA wheel, so `is_fast_path_available` is true |
+| 4 | `open_clip` import fails | Also install `ftfy` and `regex` (they were skipped by `--no-deps`) |
+| 5 | `does not support Flash Attention 2` (the remote code declares the transformers-4 attribute `_supports_flash_attn_2`) | `attn_implementation="eager"` |
+| 6 | `no attribute 'all_tied_weights_keys'` (transformers 5 requires `post_init()`) | Wrap `NemotronH_Nano_VL_V2.__init__` so it calls `post_init()` |
+| 7 | CUDA device-side assert in RADIO `_extract_final` (the `summary_idxs` buffer is not in the checkpoint, and transformers 5 re-initializes it with garbage) | After load, recompute `summary_idxs = [i for i, t in enumerate(config.args["teachers"]) if t.get("use_summary", True)]` → `[0, 1, 2]` |
+| 8 | `NemotronHCausalLMOutput has no attribute 'past_key_values'` | Set `NemotronHCausalLMOutput.past_key_values = None` (class attribute) |
+| 9 | `a view of a leaf Variable that requires grad is being used in an in-place operation` | Remove every `_require_grads_hook` (PEFT/transformers add them for checkpointing). Non-reentrant checkpointing doesn't need them. |
+| 10 | `torch.distributed.get_rank()` inside `forward` | Always launch with `torchrun` (process group initialized, even on 1 GPU) |
+
+- All patches must be **unit-tested** on CPU where possible (patches 6–9 with a tiny config) and **version-guarded**, so they turn into no-ops if upstream fixes land.
+- Pin the HF revision of `nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16` (`ca9543b126e8bf3176916d3d305ccc415f89fd4d` at the time of the spikes) and of `nvidia/C-RADIOv2-H` (`0d8f4c18c877166eda07ddae1386bcad256b7a6a`).
+
+### 11.4 Not yet checked
+
+- **Model Serving side of OQ-5 and OQ-9:** deploying a real endpoint (Nano VL Custom LLM Serving; OCR pyfunc with the custom wheel).
+- **Custom image push:** the Artifact Registry host resolves, but no image was pushed (the local Docker daemon was not running). This is no longer on the critical path.
+- **`GPU_8xH100`** availability.
+- **Registration jobs:** a DAB job task on AIR GPU compute (`compute.hardware_accelerator`, as in the cookbook Qwen recipe) has not been run yet.

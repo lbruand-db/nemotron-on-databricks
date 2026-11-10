@@ -1,0 +1,29 @@
+# M0 spike (d): build nemotron-ocr C++/CUDA extension in databricks_ai_v6 + inference + save wheel.
+experiment_name: nemotron-spike-ocr-build
+
+environment:
+  version: databricks_ai_v6
+
+compute:
+  accelerator_type: GPU_1xA10
+  num_accelerators: 1
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - src
+      - recipes/spikes/ocr_build
+
+env_variables:
+  # SASS for T4 (7.5), A10G (8.6), L40S (8.9), H100 (9.0) + PTX for forward compatibility.
+  TORCH_CUDA_ARCH_LIST: "7.5;8.6;8.9;9.0+PTX"
+  MAX_JOBS: "8"
+  OUTPUT_ROOT: /Volumes/am_rag_fevm_catalog/nemotron/artifacts/spikes/ocr_build
+
+max_retries: 0
+timeout_minutes: 60
+
+command: |
+  bash "$CODE_SOURCE_PATH/recipes/spikes/ocr_build/run.sh"
