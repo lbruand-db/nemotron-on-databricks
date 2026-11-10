@@ -63,6 +63,7 @@ def evaluate(model, exp, repo_dir, records: list[DetRecord], batch_size: int) ->
 
 def main() -> None:
     p = build_config(Params, load_parameters())
+    print(f"[setup] params: {asdict(p)}", flush=True)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     mlf.log_params({k: (json.dumps(v) if isinstance(v, list) else v) for k, v in asdict(p).items()})
     t0 = time.monotonic()

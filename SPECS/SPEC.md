@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | **Draft v0.3**: M0 spikes run (§11); no custom images needed; Nano VL trains on 1×H100 |
+| Status | **Draft v0.4**: M0 done (§11); M1 in progress, page-elements-v3 smoke run passes end-to-end |
 | Date | 2026-11-10 |
 | Owner | lbruand-db |
 | Scope | Fine-tune **and** serve 5 NVIDIA Nemotron document-intelligence models on Databricks (AI Runtime + Model Serving) |
@@ -18,6 +18,8 @@
 | 2026-11-10 | **All workloads use the stock `databricks_ai_v6` environment; no custom Docker images.** The OCR extension and `causal-conv1d` are compiled on AIR and cached as wheels on the Volume (§11). `docker/` is kept only as a documented fallback. |
 | 2026-11-10 | **Nano VL fine-tuning uses AIR's transformers 5.8.1** (not the model card's 4.53 pin), plus the compatibility patches in §11.3. One environment then serves training, vLLM eval, and serving (vLLM 0.24 requires transformers ≥ 5.5.3). Default compute is **`GPU_1xH100`**. |
 | 2026-11-10 | Storage on `fevm-am-rag-fevm`: `am_rag_fevm_catalog.nemotron` schema, `artifacts` managed volume (there is no `main` catalog). |
+| 2026-11-10 | **Registration (stage 2) runs as an AIR workload** (`recipes/<model>/register.yaml`), not as a DAB job. It is the same mechanism as training (repo-root snapshot, ai_v6, GPU, `MLFLOW_RUN_ID`), so the packaging environment matches training. The cookbook's requirement ("register from an AI Runtime GPU environment") is met, and no bundle is needed. |
+| 2026-11-10 | **page-elements-v3 defaults to `GPU_1xA10`** (batch 4 × grad accum 2). H100 capacity was unavailable for > 90 min (OQ-16); H100 stays an override. |
 
 ---
 
@@ -92,15 +94,14 @@ nemotron-on-databricks/
 ├── README.md                          # index: models, recipes, prerequisites, cost/time table
 ├── SPECS/SPEC.md                      # this document
 ├── pyproject.toml                     # shared package + dev tooling (ruff, pytest)
-├── databricks.yml                     # ONE DAB bundle: variables (catalog/schema/volume), all registration jobs
-├── resources/                         # register_<model>.job.yml (one per model)
+├── tools/air_wait.sh                   # poll an AIR run (task state incl. PENDING), then print its logs
 ├── src/nemotron_dbx/                  # shared code (see §4.1)
 │   ├── yolox_train/                   #   SimOTA loss, IOU loss, dataset/augment, train loop, EMA (vendored from Megvii YOLOX, Apache-2.0)
 │   ├── detection/                     #   COCO conversion, mAP eval, detector pyfunc (§5.3), NIM-like response formatting
 │   ├── ocr/                           #   CTC recognizer fine-tune, CER/WER eval, OCR pyfunc
 │   ├── vlm/                           #   CORD prompt/target formatting, LoRA train loop, merge, field-F1/TED eval
 │   │   └── compat.py                  #   Nano VL remote-code patches for transformers 5 (§11.3)
-│   ├── lifecycle/                     #   register_model (smoke test + log + UC register), deploy_endpoint (idempotent), query client
+│   ├── lifecycle/                     #   register (smoke test + log + UC register), deploy (idempotent endpoint), query client
 │   └── common/                        #   paths, MLflow run helpers, rank-safe IO, HF revision pinning,
 │                                      #   wheel cache (build-once CUDA extensions on the Volume, §11.2)
 ├── tests/                             # unit tests: label mapping, loss shapes, metrics, pyfunc I/O contract (CPU-only)
@@ -121,14 +122,16 @@ recipes/<model>/
 ├── README.md          intro, Before you run, Run (3 stages), Results (observed time + metrics)
 ├── workload.yaml      AIR training workload (parameters = all hyper-params, data subset, output root)
 ├── train.py           entry point: prepare data → base eval → fine-tune → fine-tuned eval → save
-└── register_job.py    notebook entry for the registration job (widgets → nemotron_dbx.lifecycle)
+├── register.yaml      AIR registration workload (parameters: source_training_run_id, registered_model_name)
+└── register.py        entry point: resolve weights from the training run's tags → nemotron_dbx.lifecycle.register
 ```
 
 ### 4.1 Shipping shared code to workloads
 
 - **AIR training:** `workload.yaml` sets `code_source.snapshot.root_path: ../..` (resolved relative to the YAML, so this is the repo root), with `include_paths: [src, recipes/<model>]`. The command sets `PYTHONPATH="$CODE_SOURCE_PATH/src"` and runs `python recipes/<model>/train.py`. **Verified in M0 (spike a):** the snapshot extracts to `/databricks/code_source/nemotron-on-databricks/` and `import nemotron_dbx` works.
   - Every workload must set `environment.version: databricks_ai_v6`. Without it, the default image has **no torch**.
-- **Registration jobs (DAB):** the bundle syncs `src/`. Notebooks add it to `sys.path`, or the bundle builds a wheel artifact (`artifacts:` → `python_wheel`) that the job environment installs.
+- **Registration:** also an AIR workload with the same snapshot (see the decision log).
+- **Dependencies:** `environment.dependencies` works but adds ~5 min of setup. Small pinned extras (e.g. `pycocotools`) are pip-installed at the start of `command` instead.
 - **Serving:** each pyfunc is logged with `code_paths=["src/nemotron_dbx"]`, so endpoints never depend on the repo at runtime.
 
 ---
@@ -150,7 +153,7 @@ recipes/<model>/
 
 ### 5.2 Registration (stage 2)
 
-- Runs as a **DAB job on an AIR GPU task**, so the packaging environment matches the serving environment, particularly for CUDA extensions.
+- Runs as an **AIR GPU workload** (`register.yaml`), so the packaging environment matches the training environment, particularly for CUDA extensions.
 - Steps:
   1. Resolve the artifacts from the training-run tag.
   2. Run a **local smoke test** of the exact packaged artifact (pyfunc `predict` or a local vLLM server).
@@ -204,7 +207,7 @@ The model is served through **Custom LLM Serving**, the cookbook pattern: a pyfu
 | **Label mapping** (11 → 6) | `Table→table`; `Title, Section-header→title`; `Page-header, Page-footer→header_footer`; `Text, List-item, Caption, Footnote, Formula→text`; `Picture→ambiguous` (chart vs infographic vs photo). **v1 default: drop training pages that contain `Picture`**, which avoids false negatives on chart/infographic. Alternative: ignore-region masking (OQ-2). |
 | **Fine-tune method** | Full fine-tune of the 54 M YOLOX model with the same architecture and class count, loading `weights.pth` strictly. The HF `YOLOXHead.forward` has **no training branch**, so we vendor `get_losses` / SimOTA assignment / `IOUloss` from Megvii YOLOX (Apache-2.0), adapted to the HF module names. The HF wrapper's letterbox preprocessing (`resize_pad` to 1024²) is reused for train and inference. Augmentation: scale jitter (0.8–1.2), color/contrast jitter, slight JPEG noise. **No mosaic/flip**, because document layout semantics are orientation-sensitive. |
 | **Hyper-params (default)** | AdamW, lr 1e-4 (backbone 1e-5), cosine schedule, 10 epochs, batch 8, bf16 AMP, EMA 0.9998 |
-| **Compute** | `GPU_1xA10` (single GPU, about 15–25 min target). DDP optional via `torchrun` on `GPU_8xH100` (documented, not the default). |
+| **Compute** | `GPU_1xA10`, batch 4 × grad accum 2, training capped at 45 min (OQ-16). Override to `GPU_1xH100` with batch 8. |
 | **Eval** | COCO mAP@[.5:.95] and mAP@.5, per class and overall (`pycocotools`), on the test split, **base vs fine-tuned**. Use the HF post-processing (`postprocess_preds_page_element`, per-class thresholds, WBF) so the numbers reflect what serving returns. |
 | **Artifacts** | `<root>/<run>/weights/weights.pth` + `config.json` (thresholds) + `metrics.json` |
 | **Serving** | pyfunc per §5.3; labels `table, chart, infographic, title, header_footer, text` |
@@ -367,6 +370,7 @@ Repo-level:
 | ~~OQ-12~~ | ~~AIR accelerator types / previews on `fevm-am-rag-fevm`~~ | **Resolved:** `GPU_1xA10` and `GPU_1xH100` run (`GPU_8xH100`/`GPU_8xB300` not tried). The Artifact Registry host is configured. The GPU pools API is *not* enabled (not needed). |
 | ~~OQ-14~~ | ~~Workspace TTL and storage~~ | **Resolved:** expires **2026-11-28** (extension may be needed for M4/M5); storage is `am_rag_fevm_catalog.nemotron.artifacts` |
 | OQ-15 | `databricks air run --watch` log streaming can lag far behind the run (spike e finished at 17:38 UTC, the stream ended at 18:17). | Don't rely on `--watch` for completion; check `databricks air get <run-id>` or the job-run page |
+| OQ-16 | **GPU capacity waits are invisible.** A `GPU_1xH100` run stayed task-`PENDING` ("In run") for 90 min, then `TIMEDOUT`, with no logs, while `air get` reported `RUNNING`. Earlier H100 runs started in seconds. | `tools/air_wait.sh` prints the task life-cycle state. Default small models to A10, and cap `timeout_minutes` on smoke runs. |
 | OQ-13 | Customer data: will the cookbook later be pointed at customer documents (in their own UC volume)? If so, each `prepare_data.py` needs a "bring your own COCO/JSONL" path. | Add a `dataset_source: hf|volume` parameter in v1 |
 
 ---
@@ -376,7 +380,7 @@ Repo-level:
 | # | Deliverable | Notes |
 |---|---|---|
 | M0 ✅ | Spikes on `fevm-am-rag-fevm`, under `recipes/spikes/`: (a) capabilities and storage ✅; (b) repo-root `root_path` ✅; (c) Nano VL vLLM + image on AIR ✅; (d) OCR extension build + inference on AIR ✅; (e) Nano VL PEFT LoRA, 10 steps ✅. See §11. | Carried over to M1/M3/M4: deploy-side halves of OQ-5 and OQ-9 |
-| M1 | `page-elements-v3` end-to-end (train → register → serve). This also produces the first real Model Serving GPU endpoint, which de-risks the serving half of OQ-9 for the CV models. | Establishes the YOLOX training stack and the detector serving contract |
+| M1 🚧 | `page-elements-v3` end-to-end (train → register → serve). This also produces the first real Model Serving GPU endpoint, which de-risks the serving half of OQ-9 for the CV models. | **Smoke run passes** (A10, 64/16/16 pages, 1 epoch, 4.7 min): test mAP 0.26 → 0.46 on 16 pages (noisy). The full run, registration and serving are pending. |
 | M2 | `table-structure-v1` + `graphic-elements-v1` | Reuse `nemotron_dbx.yolox_train` + `detection` from M1 |
 | M3 | `ocr-v1` (recognizer fine-tune, custom image, serving) | |
 | M4 | `nano-12b-v2-vl` LoRA → merged → Custom LLM Serving | |

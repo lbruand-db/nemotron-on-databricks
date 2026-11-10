@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -117,11 +118,16 @@ def prepare_split(split: str, cfg: SubsetConfig, out_dir: Path, source: HFSource
     rows: dict[str, list] = {"image": [], "boxes": [], "labels": [], "image_id": [], "doc_category": []}
     seen = skipped_picture = skipped_empty = 0
     used_shards = []
-    for shard in _split_shards(source, split):
+    t0 = time.monotonic()
+    shards = _split_shards(source, split)
+    print(f"[data] {split}: {len(shards)} shards available, target {limit} pages", flush=True)
+    for shard in shards:
         if len(rows["image"]) >= limit:
             break
         local = source.file(shard, local_dir=scratch_dir("doclaynet-shards"))
         used_shards.append(shard)
+        print(f"[data] {split}: downloaded {shard} ({Path(local).stat().st_size / 1e6:.0f} MB) "
+              f"at {time.monotonic() - t0:.0f}s", flush=True)
         for r in _iter_rows(str(local)):
             meta = r["metadata"]
             if meta["doc_category"] not in cats:
@@ -143,6 +149,8 @@ def prepare_split(split: str, cfg: SubsetConfig, out_dir: Path, source: HFSource
             rows["doc_category"].append(meta["doc_category"])
             if len(rows["image"]) >= limit:
                 break
+        print(f"[data] {split}: {len(rows['image'])}/{limit} pages kept after {shard} "
+              f"(seen {seen}, picture-skipped {skipped_picture}) at {time.monotonic() - t0:.0f}s", flush=True)
         if os.environ.get("NEMOTRON_KEEP_SHARDS") != "1":
             Path(local).unlink(missing_ok=True)
 

@@ -4,14 +4,16 @@ This recipe fine-tunes [`nvidia/nemotron-page-elements-v3`](https://huggingface.
 on the DocLayNet *financial reports* and *manuals* pages. That model is a 54 M-parameter YOLOX-L page-layout detector with 6 classes: table, chart, title, infographic, text and header/footer.
 The recipe then compares the base and fine-tuned models on a held-out split, registers the fine-tuned model in Unity Catalog, and serves it on a GPU Model Serving endpoint.
 
-- **Training:** full fine-tune on 1× H100 (`GPU_1xH100`) with NVIDIA's own preprocessing (letterbox to 1024² in RGB 0–255).
+- **Training:** full fine-tune on 1× A10 (`GPU_1xA10`, batch 4 × gradient accumulation 2; H100 optional), with NVIDIA's own preprocessing (letterbox to 1024² in RGB 0–255).
   - The training head is Megvii's SimOTA / IoU / BCE loss, re-attached to NVIDIA's head modules (`nemotron_dbx.yolox_train`).
   - EMA weights are used. The backbone learns at 0.1× the learning rate.
-  - The run stops after 8 epochs or 25 minutes, whichever comes first.
+  - The run stops after 8 epochs or 45 minutes of training, whichever comes first.
 - **Data:** [`docling-project/DocLayNet-v1.2`](https://huggingface.co/datasets/docling-project/DocLayNet-v1.2) (CDLA-Permissive-1.0), with the 11 DocLayNet classes mapped to the model's 6.
   - Pages with a `Picture` box are dropped, because a picture can be a chart, an infographic or a photo (SPEC OQ-2).
   - Defaults: 2,000 train, 200 validation and 300 test pages, taken from the official splits.
 - **Evaluation:** COCO mAP@[.5:.95] and mAP@.5, overall and per class. It runs through NVIDIA's inference wrapper (NMS with `conf_thresh=0.01`), so the numbers reflect what serving returns.
+
+**Interpreting the gains:** NVIDIA's training labels come from Azure Document Intelligence plus human annotators. DocLayNet uses its own conventions, for example paragraph- and list-item-level `text` boxes. Much of the early mAP gain, especially on `text`, likely comes from adapting to DocLayNet's annotation style rather than from generally better layout detection. Use your own labeled pages to measure what matters for your documents.
 
 ## Before you run
 
