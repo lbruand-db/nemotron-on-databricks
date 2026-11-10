@@ -1,0 +1,51 @@
+# Stage 1: fine-tune nvidia/nemotron-page-elements-v3 on a DocLayNet subset (financial reports + manuals).
+# Run from the repo root:  databricks air run -f recipes/page-elements-v3/workload.yaml --watch
+experiment_name: nemotron-page-elements-v3
+
+mlflow_run_name: page-elements-v3-doclaynet-ft
+
+environment:
+  version: databricks_ai_v6
+  dependencies:
+    - pycocotools==2.0.11
+
+compute:
+  accelerator_type: GPU_1xH100
+  num_accelerators: 1
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../..  # repo root (resolved relative to this file)
+    include_paths:
+      - src
+      - recipes/page-elements-v3
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+  PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+
+parameters:
+  # Durable outputs + dataset cache. Must be an existing writable Volume directory.
+  output_root: /Volumes/am_rag_fevm_catalog/nemotron/artifacts/page-elements-v3
+  doc_categories: [financial_reports, manuals]
+  train_pages: 2000
+  val_pages: 200
+  test_pages: 300
+  drop_picture_pages: true
+  epochs: 8
+  batch_size: 8
+  lr: 0.0001
+  backbone_lr_mult: 0.1
+  warmup_steps: 100
+  max_train_minutes: 25
+  seed: 0
+
+max_retries: 0
+timeout_minutes: 90
+
+command: |
+  cd "$CODE_SOURCE_PATH"
+  export PYTHONPATH="$CODE_SOURCE_PATH/src:${PYTHONPATH:-}"
+  python recipes/page-elements-v3/train.py
