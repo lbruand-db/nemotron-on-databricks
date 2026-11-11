@@ -41,3 +41,5 @@ PAGE_ELEMENTS_V3 = HFSource("nvidia/nemotron-page-elements-v3", "df62dbb63150257
 DOCLAYNET_V1_2 = HFSource(
     "docling-project/DocLayNet-v1.2", "0daf93102e2efce76c3e11a274a5e0d0969391d3", repo_type="dataset"
 )
+NEMOTRON_OCR_V1 = HFSource("nvidia/nemotron-ocr-v1", "8657d08d3279f4864002d5fd3fdcd47ad8c96bcb")
+CORD_V2 = HFSource("naver-clova-ix/cord-v2", "7f0115a4b758a71d6473b8d085751692da2fef98", repo_type="dataset")

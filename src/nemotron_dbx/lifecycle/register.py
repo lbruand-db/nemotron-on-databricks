@@ -128,10 +128,12 @@ def register_detector(
     return RegistrationResult(registered_model_name, str(version.version), info.model_uri, n_boxes)
 
 
-def _pip_requirements() -> list[str]:
+def _pip_requirements(extra: tuple[str, ...] = (), exact_torch: bool = False) -> list[str]:
+    """Pin the AIR environment's versions. `exact_torch` keeps the CUDA local tag (e.g. 2.11.0+cu130) and adds
+    the matching PyTorch index, so compiled extensions see the same torch ABI and CUDA runtime as at build time."""
     from importlib.metadata import version
 
-    pkgs = ["mlflow", "torch", "torchvision", "numpy", "pillow", "pandas", "huggingface_hub"]
+    pkgs = ["mlflow", "torch", "torchvision", "numpy", "pillow", "pandas", "huggingface_hub", *extra]
     reqs = []
     for p in pkgs:
         try:
@@ -139,5 +141,76 @@ def _pip_requirements() -> list[str]:
         except Exception:  # noqa: BLE001
             reqs.append(p)
             continue
-        reqs.append(f"{p}=={v.split('+')[0]}")
+        if exact_torch and p in ("torch", "torchvision") and "+" in v:
+            reqs.append(f"{p}=={v}")
+        else:
+            reqs.append(f"{p}=={v.split('+')[0]}")
+    if exact_torch:
+        tag = version("torch").partition("+")[2]
+        if tag.startswith("cu"):
+            reqs.insert(0, f"--extra-index-url https://download.pytorch.org/whl/{tag}")
     return reqs
+
+
+def register_ocr(
+    checkpoints: str | Path,
+    wheel: str | Path,
+    registered_model_name: str,
+    sample_images: list[bytes],
+    source_training_run_id: str | None = None,
+    extra_tags: dict[str, str] | None = None,
+) -> RegistrationResult:
+    """Register the OCR pyfunc. The nemotron-ocr wheel (C++/CUDA extension) ships via code_paths."""
+    import mlflow
+    import pandas as pd
+    from mlflow.models import infer_signature
+
+    from ..ocr.serving import OCRModel
+
+    mlflow.set_registry_uri("databricks-uc")
+    os.environ.setdefault("MLFLOW_USE_DATABRICKS_SDK_MODEL_ARTIFACTS_REPO_FOR_UC", "true")
+    params = {"merge_level": "paragraph"}
+    wheel = Path(wheel)
+    artifacts = {"checkpoints": str(checkpoints)}
+
+    model = OCRModel()
+    model.load_context(SimpleNamespace(artifacts=artifacts))
+    df = pd.DataFrame([{"image": base64.b64encode(sample_images[0]).decode(), "id": "smoke-0"}])
+    out = model.predict(None, df, params=params)
+    n_regions = sum(len(o["regions"]) for o in out)
+    if not out or n_regions == 0:
+        raise RuntimeError(f"OCR smoke test returned no regions: {str(out)[:300]}")
+    print(f"Smoke test OK: {n_regions} regions; first: {out[0]['regions'][:2]}", flush=True)
+    try:
+        signature = infer_signature(df, out, params=params)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Output signature inference failed ({exc!r}); logging input/params signature only")
+        signature = infer_signature(df, params=params)
+
+    reqs = _pip_requirements(extra=("shapely", "scikit-learn"), exact_torch=True) + [f"code/{wheel.name}"]
+    run_id = os.environ.get("MLFLOW_RUN_ID")
+    with mlflow.start_run(run_id=run_id) if run_id else mlflow.start_run() as run:
+        info = mlflow.pyfunc.log_model(
+            name="model",
+            python_model=OCRModel(),
+            artifacts=artifacts,
+            code_paths=[str(package_dir()), str(wheel)],
+            signature=signature,
+            input_example=(df, params),
+            pip_requirements=reqs,
+        )
+        version = mlflow.register_model(info.model_uri, registered_model_name)
+        mlflow.set_tags({
+            "nemotron.spec": "ocr_v1",
+            "nemotron.registered_model": registered_model_name,
+            "nemotron.registered_version": str(version.version),
+            "nemotron.pip_requirements": " | ".join(reqs),
+            **({"nemotron.source_training_run_id": source_training_run_id} if source_training_run_id else {}),
+            **(extra_tags or {}),
+        })
+        if source_training_run_id:
+            client = mlflow.MlflowClient()
+            client.set_tag(source_training_run_id, "nemotron.registered_model", registered_model_name)
+            client.set_tag(source_training_run_id, "nemotron.registered_version", str(version.version))
+            client.set_tag(source_training_run_id, "nemotron.packaging_run_id", run.info.run_id)
+    return RegistrationResult(registered_model_name, str(version.version), info.model_uri, n_regions)

@@ -237,12 +237,14 @@ The model is served through **Custom LLM Serving**, the cookbook pattern: a pyfu
 
 #### 6.4.1 What fine-tuning means here
 
-The model has three jointly trained components: a detector (45 M), a recognizer (4.9 M), and a relational model (2.3 M). The recognizer is a conv + 3-layer Transformer-encoder **CTC** head (blank = index 0, beam decoding with an optional n-gram LM). It reads **rectified feature maps from the detector backbone**, not raw crops; these come from the FOTS-style RoI rotate using the custom `indirect_grid_sample` op.
+The model has three jointly trained components: a detector (45 M), a recognizer (4.9 M), and a relational model (2.3 M). The recognizer is a conv + 3-layer Transformer encoder emitting **32 positions × 858 tokens** (0 = blank, 1 = EOS, 2 = rare, 3.. = charset). It reads **rectified feature maps from the detector** (`det_feature_3`), not raw crops: `QuadRectify(8, 32)` builds a sampling grid from each quad (vertex order TL, TR, BR, BL), and the custom CUDA `IndirectGridSample` op samples the features along it.
+
+**Correction (2026-11-11), from reading `RecognitionTargetEncoder`:** the default inference decodes **per position** (argmax, skip blanks, stop at EOS, no duplicate merging). CTC beam decoding is only used with `combine_duplicates` or a language model, and the training targets are `text + EOS` with a mask. So fine-tuning uses **masked per-position cross-entropy** over `[c_1..c_L, EOS]`, not CTC.
 
 **v1 scope: recognizer-only fine-tuning.**
 
 - Freeze the detector and relational models.
-- For each training image, run the frozen detector backbone, rectify the **ground-truth quads**, run the recognizer, and compute the CTC loss against the GT text. No gradient flows through the custom CUDA op.
+- For each training image: preprocess exactly like `NemotronOCR._process_tensor` (pad to a square at the bottom-right with white, resize to 1024), run the frozen detector, rectify the **ground-truth quads** (jittered by ~6 % of the word height to mimic detector noise), run the recognizer, and compute the masked per-position CE against `text + EOS`. Words with out-of-charset characters or ≥ 32 characters are skipped for training. No gradient flows through the custom CUDA ops. BatchNorm statistics are frozen.
 - **Stretch (v2):** detector fine-tuning (FOTS detection loss: score map + geometry) and relational fine-tuning. These need loss code that the repo does not ship, so they are out of v1 (OQ-7).
 
 #### 6.4.2 Data
@@ -261,8 +263,8 @@ The model has three jointly trained components: a detector (45 M), a recognizer 
 #### 6.4.4 Build and environment
 
 - Python 3.12 and a **C++/CUDA extension** (`nemotron_ocr_cpp`, built with hatchling and needing GCC with C++17, CUDA headers, and OpenMP). Only core CUDA headers are needed (`cuda_runtime`, thrust, cooperative_groups; `trove` is vendored).
-- **No custom image** (spike d). In `databricks_ai_v6` (nvcc 13.0, gcc 13.3), `pip wheel --no-build-isolation` with `TORCH_CUDA_ARCH_LIST="7.5;8.6;8.9;9.0+PTX"` builds a 36 MB wheel in **254 s on 1×A10**. The wheel is cached on the Volume and installed with `--no-deps`. `shapely` may need installing.
-- For serving, the **cached wheel** is shipped as an MLflow artifact and installed via `extra_pip_requirements` (local wheel path); `env_pack` is the alternative. Whether it loads in the serving image is still OQ-9.
+- **No custom image** (spike d). In `databricks_ai_v6` (nvcc 13.0, gcc 13.3), `pip wheel --no-build-isolation` with `TORCH_CUDA_ARCH_LIST="7.5;8.6;8.9;9.0+PTX"` builds a 36 MB wheel in **254 s on 1×A10**. `nemotron_dbx.ocr.build.ensure_installed` caches it under `<volume>/wheels/nemotron-ocr/<rev8>-<torch tag>/` and installs it with `--no-deps` (plus `hatchling` and `shapely` if missing).
+- For serving, the cached wheel is logged via `code_paths` and installed with the pip requirement `code/<wheel>`. torch and torchvision are pinned **with their CUDA tag** (`torch==2.11.0+cu130` + `--extra-index-url https://download.pytorch.org/whl/cu130`), so the extension sees the same torch ABI and CUDA runtime as at build time. `env_pack` is not used (OQ-17).
 - **Output quirk:** in the pipeline output, `upper` > `lower` (the y-axis is flipped). The pyfunc normalizes boxes to `y_min ≤ y_max`.
 
 #### 6.4.5 Compute, eval, serving

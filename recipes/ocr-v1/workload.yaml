@@ -1,0 +1,50 @@
+# Stage 1: fine-tune the nemotron-ocr-v1 recognizer on CORD-v2 (detector + relational model frozen).
+# Run from the repo root:  databricks air run -f recipes/ocr-v1/workload.yaml
+experiment_name: nemotron-ocr-v1
+
+mlflow_run_name: ocr-v1-cord-recognizer-ft
+
+environment:
+  version: databricks_ai_v6
+
+compute:
+  accelerator_type: GPU_1xA10
+  num_accelerators: 1
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../..
+    include_paths:
+      - src
+      - recipes/ocr-v1
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+  MAX_JOBS: "8"
+
+parameters:
+  # Durable outputs. Must be an existing writable Volume directory.
+  output_root: /Volumes/am_rag_fevm_catalog/nemotron/artifacts/ocr-v1
+  # Build-once cache for the nemotron-ocr C++/CUDA extension wheel (first build ~4-5 min on A10).
+  wheel_cache: /Volumes/am_rag_fevm_catalog/nemotron/artifacts/wheels
+  train_items: 0
+  val_items: 0
+  test_items: 0
+  epochs: 10
+  images_per_step: 4
+  max_regions_per_step: 128
+  lr: 0.0001
+  quad_jitter: 0.06
+  max_train_minutes: 30
+  eval_end_to_end: true
+  seed: 0
+
+max_retries: 0
+timeout_minutes: 90
+
+command: |
+  cd "$CODE_SOURCE_PATH"
+  export PYTHONPATH="$CODE_SOURCE_PATH/src:${PYTHONPATH:-}"
+  python -u recipes/ocr-v1/train.py

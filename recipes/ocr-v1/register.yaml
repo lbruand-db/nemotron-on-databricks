@@ -1,0 +1,39 @@
+# Stage 2: register the fine-tuned nemotron-ocr-v1 checkpoints of a stage-1 run in Unity Catalog.
+# Run from the repo root:
+#   databricks air run -f recipes/ocr-v1/register.yaml --override parameters.source_training_run_id=<MLFLOW_RUN_ID>
+experiment_name: nemotron-ocr-v1
+
+mlflow_run_name: ocr-v1-register
+
+environment:
+  version: databricks_ai_v6
+
+compute:
+  accelerator_type: GPU_1xA10
+  num_accelerators: 1
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../..
+    include_paths:
+      - src
+      - recipes/ocr-v1
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+
+parameters:
+  source_training_run_id: ""
+  # Requires USE CATALOG, USE SCHEMA, CREATE MODEL on the target schema.
+  registered_model_name: am_rag_fevm_catalog.nemotron.nemotron_ocr_v1_ft
+  wheel_cache: /Volumes/am_rag_fevm_catalog/nemotron/artifacts/wheels
+
+max_retries: 0
+timeout_minutes: 45
+
+command: |
+  cd "$CODE_SOURCE_PATH"
+  export PYTHONPATH="$CODE_SOURCE_PATH/src:${PYTHONPATH:-}"
+  python -u recipes/ocr-v1/register.py
