@@ -52,6 +52,21 @@ The endpoint returns text regions in reading order, with normalized boxes:
 
 ## Results
 
+Observed on 2026-11-11 (`fevm-am-rag-fevm`, 1× A10; HF revision `8657d08d`, CORD-v2 revision `7f0115a4`):
+
+| Split | Metric | Base | Fine-tuned |
+|---|---|---|---|
+| test (100 receipts, 2,356 words) | GT-quad CER | 4.95 % | **1.63 %** |
+| | GT-quad word accuracy | 88.5 % | **95.3 %** |
+| | end-to-end bag-of-words F1 | 0.819 | **0.848** |
+| val (100 receipts) | GT-quad CER | 4.54 % | 0.84 % |
+
+- **Training:** 8.6 min end to end with the cached wheel (6.6 min for 10 epochs over 19,367 words). The first build of the C++/CUDA extension adds ~4 min.
+- **Remaining errors:** mostly in detection and word grouping, which are frozen (`CASH IDR` → `CASHIDR`, `( L` → `(L`). Fine-tuning them is out of scope (SPEC OQ-7).
+- **Registration:** ~2 min.
+- **Serving:** endpoint `GPU_SMALL` (T4) was ready in ~38 min, most of it building the container (PyTorch cu130 index + the extension wheel). Two receipts at `merge_level="word"` took ~6.5 s round trip.
+
+
 The AIR MLflow run contains:
 - the parameters;
 - the training curves (`train/loss`, `train/token_acc`);

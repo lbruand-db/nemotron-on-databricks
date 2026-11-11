@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | **Draft v0.5**: M0 done (§11); **M1 done**: page-elements-v3 trained, registered and served on GPU_SMALL |
+| Status | **Draft v0.6**: M0, **M1 (page-elements-v3) and M3 (ocr-v1) done**: both trained, registered and served on GPU_SMALL |
 | Date | 2026-11-10 |
 | Owner | lbruand-db |
 | Scope | Fine-tune **and** serve 5 NVIDIA Nemotron document-intelligence models on Databricks (AI Runtime + Model Serving) |
@@ -367,7 +367,7 @@ Repo-level:
 | OQ-6 | Exact NIM response schemas for page-elements, table-structure, graphic-elements, and OCR, to mirror field names | Mirror best-effort, document differences |
 | OQ-7 | OCR detector/relational fine-tuning needs loss code not shipped in the HF repo | v1 = recognizer only |
 | ~~OQ-8~~ | ~~OCR charset lacks `€`/`£`~~ | **Resolved:** not needed for now; report the out-of-charset rate only |
-| OQ-9 | Will the C++/CUDA OCR extension built on AIR load in the Model Serving GPU image? | **Partly resolved:** builds and runs on AIR (spike d). The Model Serving GPU host has driver 580 (CUDA 13 capable), and a pip-built image runs torch 2.11 on T4 (M1). Since `env_pack` is out (OQ-17), the wheel must be installed via `pip_requirements`, pointing at the wheel logged as a model artifact. Verify in M3. |
+| ~~OQ-9~~ | ~~Will the C++/CUDA OCR extension built on AIR load in the Model Serving GPU image?~~ | **Resolved (M3):** the wheel ships via `code_paths` + `code/<wheel>` pip requirement, with `torch==2.11.0+cu130` from the PyTorch cu130 index. Endpoint READY on T4 and serving correct text. Earlier notes: builds and runs on AIR (spike d). The Model Serving GPU host has driver 580 (CUDA 13 capable), and a pip-built image runs torch 2.11 on T4 (M1). Since `env_pack` is out (OQ-17), the wheel must be installed via `pip_requirements`, pointing at the wheel logged as a model artifact. Verify in M3. |
 | ~~OQ-10~~ | ~~Nano VL LoRA through HF remote code + PEFT~~ | **Resolved (spike e):** 10 steps OK on 1×H100 with transformers 5.8.1 + patches (§11.3) |
 | ~~OQ-11~~ | ~~Include Mamba projections in LoRA targets?~~ | **Default changed:** include `in_proj,out_proj` (validated). Attention+MLP-only stays an ablation. |
 | ~~OQ-12~~ | ~~AIR accelerator types / previews on `fevm-am-rag-fevm`~~ | **Resolved:** `GPU_1xA10` and `GPU_1xH100` run (`GPU_8xH100`/`GPU_8xB300` not tried). The Artifact Registry host is configured. The GPU pools API is *not* enabled (not needed). |
@@ -387,7 +387,7 @@ Repo-level:
 | M0 ✅ | Spikes on `fevm-am-rag-fevm`, under `recipes/spikes/`: (a) capabilities and storage ✅; (b) repo-root `root_path` ✅; (c) Nano VL vLLM + image on AIR ✅; (d) OCR extension build + inference on AIR ✅; (e) Nano VL PEFT LoRA, 10 steps ✅. See §11. | Carried over to M1/M3/M4: deploy-side halves of OQ-5 and OQ-9 |
 | M1 ✅ | `page-elements-v3` end-to-end (train → register → serve). | Full run on A10 took 22 min: **test mAP 0.211 → 0.635** (300 pages), val 0.183 → 0.599. Registered v2 (pip env). Endpoint `nemotron-page-elements-v3-ft` (GPU_SMALL T4) is READY: cold start ~2 min, warm 3 pages ≈ 5 s. |
 | M2 | `table-structure-v1` + `graphic-elements-v1` | Reuse `nemotron_dbx.yolox_train` + `detection` from M1 |
-| M3 | `ocr-v1` (recognizer fine-tune, custom image, serving) | |
+| M3 ✅ | `ocr-v1` (recognizer fine-tune, serving with the compiled extension) | A10, 8.6 min: **test GT-quad CER 4.95 % → 1.63 %**, word acc 88.5 → 95.3 %, end-to-end BoW F1 0.819 → 0.848. Endpoint `nemotron-ocr-v1-ft` (GPU_SMALL) READY in ~38 min (container build). No custom image. |
 | M4 | `nano-12b-v2-vl` LoRA → merged → Custom LLM Serving | |
 | M5 | Top-level README, metrics table, optional pipeline demo (§7) | |
 

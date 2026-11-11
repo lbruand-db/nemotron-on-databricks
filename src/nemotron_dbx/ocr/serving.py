@@ -36,7 +36,7 @@ def format_regions(preds: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         left, upper, right, lower = vals
         out.append({
-            "text": text,
+            "text": str(text),  # the pipeline returns numpy str_
             "confidence": round(float(p.get("confidence", 0.0)), 5),
             "x_min": round(min(left, right), 5), "y_min": round(min(upper, lower), 5),
             "x_max": round(max(left, right), 5), "y_max": round(max(upper, lower), 5),

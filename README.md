@@ -23,7 +23,7 @@ The handoff between stages is the Volume path plus the training run's MLflow run
 | [nemotron-page-elements-v3](https://huggingface.co/nvidia/nemotron-page-elements-v3) | Page layout detection (table, chart, title, infographic, text, header/footer) | YOLOX-L, 54 M | Full fine-tune, SimOTA loss | DocLayNet v1.2 | GPU pyfunc | ✅ [done](recipes/page-elements-v3/): test mAP 0.21 → 0.64 |
 | [nemotron-table-structure-v1](https://huggingface.co/nvidia/nemotron-table-structure-v1) | Table cells, rows and columns | YOLOX-L, 54 M | Full fine-tune | PubTables-1M | GPU pyfunc | planned |
 | [nemotron-graphic-elements-v1](https://huggingface.co/nvidia/nemotron-graphic-elements-v1) | Chart titles, axes, legends and labels | YOLOX-L, 54 M | Full fine-tune | Synthetic charts | GPU pyfunc | planned |
-| [nemotron-ocr-v1](https://huggingface.co/nvidia/nemotron-ocr-v1) | OCR: text detection, recognition and reading order | RegNetY detector + CTC recognizer + relational model, 52 M | Recognizer only | CORD-v2 | GPU pyfunc + C++/CUDA extension | planned |
+| [nemotron-ocr-v1](https://huggingface.co/nvidia/nemotron-ocr-v1) | OCR: text detection, recognition and reading order | RegNetY detector + CTC recognizer + relational model, 52 M | Recognizer only | CORD-v2 | GPU pyfunc + C++/CUDA extension | ✅ [done](recipes/ocr-v1/): CER 4.95 % → 1.63 % |
 | [nemotron-nano-12b-v2-vl](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16) | Document visual Q&A and extraction | RADIO + hybrid Mamba-Transformer, 12.6 B | LoRA (HF + PEFT) | CORD-v2 → JSON | Custom LLM Serving (vLLM) | planned |
 
 All five models are under the [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/), which allows commercial use. The datasets are CC-BY-4.0, CDLA-Permissive or synthetic.
@@ -36,11 +36,14 @@ src/nemotron_dbx/     shared package, shipped with every workload
   common/             parameters, paths, pinned HF sources, MLflow helpers, rank helpers
   yolox_train/        YOLOX SimOTA loss (ported from Megvii, Apache-2.0), data pipeline, trainer
   detection/          NVIDIA detector loading, DocLayNet prep, COCO mAP, serving pyfunc
+  ocr/                OCR recognizer fine-tuning on GT quads, CORD-v2, CER/BoW metrics, serving pyfunc
   lifecycle/          register (smoke test + UC), deploy (idempotent endpoint), query
 recipes/<model>/      thin recipes: workload.yaml, register.yaml, train.py, register.py, README.md
+                      (page-elements-v3 and ocr-v1 are done)
 recipes/spikes/       M0 de-risking workloads (vLLM serving, LoRA, OCR build, ...)
 tests/                CPU unit tests (pytest)
 tools/air_wait.sh     waits for an AIR run, then prints its logs
+tools/endpoint_wait.sh  waits for a serving endpoint to be READY (shows crash loops)
 ```
 
 ## Prerequisites
@@ -94,7 +97,9 @@ These results were measured on 2026-11-10; details are in [SPECS/SPEC.md §11](S
 
 Since M0, M1 has shown that page-elements-v3 trains in 22 min on 1× A10 and serves on a `GPU_SMALL` (T4) endpoint. Use pinned pip requirements, not `env_pack`, for classic pyfuncs (SPEC OQ-17).
 
-Not verified yet: Nano VL on Custom LLM Serving (SPEC OQ-5) and the OCR extension on Model Serving (SPEC OQ-9).
+M3 then showed that the OCR recognizer fine-tunes in under 9 min, and that its compiled C++/CUDA extension serves on a T4 endpoint, shipped as a wheel with exact torch pins (SPEC OQ-9).
+
+Not verified yet: Nano VL on Custom LLM Serving (SPEC OQ-5).
 
 ## Non-goals
 
