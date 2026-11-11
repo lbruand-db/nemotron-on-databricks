@@ -1,7 +1,8 @@
 """Package a fine-tuned detector as an MLflow pyfunc, smoke-test it, and register it in Unity Catalog.
 
-Runs inside an AIR GPU workload (`recipes/<model>/register.yaml`), so the packaged environment
-(`env_pack="databricks_model_serving"`) is the same AI Runtime environment the model was trained in.
+Runs inside an AIR GPU workload (`recipes/<model>/register.yaml`). The serving environment is built from
+pinned pip requirements (versions taken from the AIR environment). `env_pack="databricks_model_serving"`
+is optional: for these classic pyfuncs it made endpoints crash-loop or time out (SPEC OQ-17).
 """
 
 from __future__ import annotations
@@ -78,7 +79,7 @@ def register_detector(
     registered_model_name: str,
     sample_images: list[bytes],
     source_training_run_id: str | None = None,
-    env_pack: bool = True,
+    env_pack: bool = False,  # True crash-loops for classic pyfuncs on Model Serving (SPEC OQ-17)
     extra_tags: dict[str, str] | None = None,
 ) -> RegistrationResult:
     import mlflow

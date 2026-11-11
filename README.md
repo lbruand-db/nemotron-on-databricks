@@ -20,7 +20,7 @@ The handoff between stages is the Volume path plus the training run's MLflow run
 
 | Model | Task | Architecture | Fine-tuning | Data | Serving | Status |
 |---|---|---|---|---|---|---|
-| [nemotron-page-elements-v3](https://huggingface.co/nvidia/nemotron-page-elements-v3) | Page layout detection (table, chart, title, infographic, text, header/footer) | YOLOX-L, 54 M | Full fine-tune, SimOTA loss | DocLayNet v1.2 | GPU pyfunc | 🚧 [in progress](recipes/page-elements-v3/) |
+| [nemotron-page-elements-v3](https://huggingface.co/nvidia/nemotron-page-elements-v3) | Page layout detection (table, chart, title, infographic, text, header/footer) | YOLOX-L, 54 M | Full fine-tune, SimOTA loss | DocLayNet v1.2 | GPU pyfunc | ✅ [done](recipes/page-elements-v3/): test mAP 0.21 → 0.64 |
 | [nemotron-table-structure-v1](https://huggingface.co/nvidia/nemotron-table-structure-v1) | Table cells, rows and columns | YOLOX-L, 54 M | Full fine-tune | PubTables-1M | GPU pyfunc | planned |
 | [nemotron-graphic-elements-v1](https://huggingface.co/nvidia/nemotron-graphic-elements-v1) | Chart titles, axes, legends and labels | YOLOX-L, 54 M | Full fine-tune | Synthetic charts | GPU pyfunc | planned |
 | [nemotron-ocr-v1](https://huggingface.co/nvidia/nemotron-ocr-v1) | OCR: text detection, recognition and reading order | RegNetY detector + CTC recognizer + relational model, 52 M | Recognizer only | CORD-v2 | GPU pyfunc + C++/CUDA extension | planned |
@@ -92,7 +92,9 @@ These results were measured on 2026-11-10; details are in [SPECS/SPEC.md §11](S
   - **LoRA training:** HF + PEFT on 1× H100 peaks at 34.6 GB. It takes 10 documented compatibility patches.
 - **OCR:** the C++/CUDA extension builds on AIR in about 4 minutes, and inference takes about 70–90 ms per page on an A10G.
 
-Not verified yet: serving these models on actual Model Serving endpoints (SPEC OQ-5, OQ-9).
+Since M0, M1 has shown that page-elements-v3 trains in 22 min on 1× A10 and serves on a `GPU_SMALL` (T4) endpoint. Use pinned pip requirements, not `env_pack`, for classic pyfuncs (SPEC OQ-17).
+
+Not verified yet: Nano VL on Custom LLM Serving (SPEC OQ-5) and the OCR extension on Model Serving (SPEC OQ-9).
 
 ## Non-goals
 

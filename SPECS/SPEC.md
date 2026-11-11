@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | **Draft v0.4**: M0 done (§11); M1 in progress, page-elements-v3 smoke run passes end-to-end |
+| Status | **Draft v0.5**: M0 done (§11); **M1 done**: page-elements-v3 trained, registered and served on GPU_SMALL |
 | Date | 2026-11-10 |
 | Owner | lbruand-db |
 | Scope | Fine-tune **and** serve 5 NVIDIA Nemotron document-intelligence models on Databricks (AI Runtime + Model Serving) |
@@ -19,6 +19,7 @@
 | 2026-11-10 | **Nano VL fine-tuning uses AIR's transformers 5.8.1** (not the model card's 4.53 pin), plus the compatibility patches in §11.3. One environment then serves training, vLLM eval, and serving (vLLM 0.24 requires transformers ≥ 5.5.3). Default compute is **`GPU_1xH100`**. |
 | 2026-11-10 | Storage on `fevm-am-rag-fevm`: `am_rag_fevm_catalog.nemotron` schema, `artifacts` managed volume (there is no `main` catalog). |
 | 2026-11-10 | **Registration (stage 2) runs as an AIR workload** (`recipes/<model>/register.yaml`), not as a DAB job. It is the same mechanism as training (repo-root snapshot, ai_v6, GPU, `MLFLOW_RUN_ID`), so the packaging environment matches training. The cookbook's requirement ("register from an AI Runtime GPU environment") is met, and no bundle is needed. |
+| 2026-11-11 | **Classic pyfuncs are registered without `env_pack`** (pinned pip requirements instead). With `env_pack="databricks_model_serving"`, the endpoint crash-looped on T4 and timed out on A10G (OQ-17). `env_pack` stays the Custom LLM Serving (vLLM) path for Nano VL, as in the cookbook. |
 | 2026-11-10 | **page-elements-v3 defaults to `GPU_1xA10`** (batch 4 × grad accum 2). H100 capacity was unavailable for > 90 min (OQ-16); H100 stays an override. |
 
 ---
@@ -158,7 +159,7 @@ recipes/<model>/
   1. Resolve the artifacts from the training-run tag.
   2. Run a **local smoke test** of the exact packaged artifact (pyfunc `predict` or a local vLLM server).
   3. `mlflow.pyfunc.log_model(...)`.
-  4. `mlflow.register_model(..., env_pack="databricks_model_serving")`.
+  4. `mlflow.register_model(...)`. Classic pyfuncs use pinned pip requirements and **no `env_pack`** (OQ-17). Custom LLM Serving models use `env_pack="databricks_model_serving"`.
   5. Tag both runs with the registered version.
 - Never alias or overwrite. Each run creates a new version, and this is documented.
 
@@ -364,12 +365,14 @@ Repo-level:
 | OQ-6 | Exact NIM response schemas for page-elements, table-structure, graphic-elements, and OCR, to mirror field names | Mirror best-effort, document differences |
 | OQ-7 | OCR detector/relational fine-tuning needs loss code not shipped in the HF repo | v1 = recognizer only |
 | ~~OQ-8~~ | ~~OCR charset lacks `€`/`£`~~ | **Resolved:** not needed for now; report the out-of-charset rate only |
-| OQ-9 | Will the C++/CUDA OCR extension built on AIR load in the Model Serving GPU image (CUDA 13 driver, glibc 2.39, Python 3.12 ABI)? | **Partly resolved:** builds and runs on AIR (spike d). Remaining: load test in a real endpoint during M3 (or earlier with a throwaway pyfunc). |
+| OQ-9 | Will the C++/CUDA OCR extension built on AIR load in the Model Serving GPU image? | **Partly resolved:** builds and runs on AIR (spike d). The Model Serving GPU host has driver 580 (CUDA 13 capable), and a pip-built image runs torch 2.11 on T4 (M1). Since `env_pack` is out (OQ-17), the wheel must be installed via `pip_requirements`, pointing at the wheel logged as a model artifact. Verify in M3. |
 | ~~OQ-10~~ | ~~Nano VL LoRA through HF remote code + PEFT~~ | **Resolved (spike e):** 10 steps OK on 1×H100 with transformers 5.8.1 + patches (§11.3) |
 | ~~OQ-11~~ | ~~Include Mamba projections in LoRA targets?~~ | **Default changed:** include `in_proj,out_proj` (validated). Attention+MLP-only stays an ablation. |
 | ~~OQ-12~~ | ~~AIR accelerator types / previews on `fevm-am-rag-fevm`~~ | **Resolved:** `GPU_1xA10` and `GPU_1xH100` run (`GPU_8xH100`/`GPU_8xB300` not tried). The Artifact Registry host is configured. The GPU pools API is *not* enabled (not needed). |
 | ~~OQ-14~~ | ~~Workspace TTL and storage~~ | **Resolved:** expires **2026-11-28** (extension may be needed for M4/M5); storage is `am_rag_fevm_catalog.nemotron.artifacts` |
 | OQ-15 | `databricks air run --watch` log streaming can lag far behind the run (spike e finished at 17:38 UTC, the stream ended at 18:17). | Don't rely on `--watch` for completion; check `databricks air get <run-id>` or the job-run page |
+| OQ-17 | **`env_pack="databricks_model_serving"` breaks classic pyfunc endpoints.** On T4 the server restarted every ~3 min right after "Downloads completed", with no traceback; on A10G the update was aborted ("endpoint update timed out"). The same model registered with pip requirements was READY on T4 in < 25 min. | Don't use `env_pack` for classic pyfuncs. If needed, raise it with the Model Serving team. |
+| OQ-18 | The Databricks CLI now prints a banner ("Databricks skills are not installed…") on stdout before `-o json` output, which breaks naive JSON parsing. | Tools parse from the first `{`. |
 | OQ-16 | **GPU capacity waits are invisible.** A `GPU_1xH100` run stayed task-`PENDING` ("In run") for 90 min, then `TIMEDOUT`, with no logs, while `air get` reported `RUNNING`. Earlier H100 runs started in seconds. | `tools/air_wait.sh` prints the task life-cycle state. Default small models to A10, and cap `timeout_minutes` on smoke runs. |
 | OQ-13 | Customer data: will the cookbook later be pointed at customer documents (in their own UC volume)? If so, each `prepare_data.py` needs a "bring your own COCO/JSONL" path. | Add a `dataset_source: hf|volume` parameter in v1 |
 
@@ -380,7 +383,7 @@ Repo-level:
 | # | Deliverable | Notes |
 |---|---|---|
 | M0 ✅ | Spikes on `fevm-am-rag-fevm`, under `recipes/spikes/`: (a) capabilities and storage ✅; (b) repo-root `root_path` ✅; (c) Nano VL vLLM + image on AIR ✅; (d) OCR extension build + inference on AIR ✅; (e) Nano VL PEFT LoRA, 10 steps ✅. See §11. | Carried over to M1/M3/M4: deploy-side halves of OQ-5 and OQ-9 |
-| M1 🚧 | `page-elements-v3` end-to-end (train → register → serve). This also produces the first real Model Serving GPU endpoint, which de-risks the serving half of OQ-9 for the CV models. | **Smoke run passes** (A10, 64/16/16 pages, 1 epoch, 4.7 min): test mAP 0.26 → 0.46 on 16 pages (noisy). The full run, registration and serving are pending. |
+| M1 ✅ | `page-elements-v3` end-to-end (train → register → serve). | Full run on A10 took 22 min: **test mAP 0.211 → 0.635** (300 pages), val 0.183 → 0.599. Registered v2 (pip env). Endpoint `nemotron-page-elements-v3-ft` (GPU_SMALL T4) is READY: cold start ~2 min, warm 3 pages ≈ 5 s. |
 | M2 | `table-structure-v1` + `graphic-elements-v1` | Reuse `nemotron_dbx.yolox_train` + `detection` from M1 |
 | M3 | `ocr-v1` (recognizer fine-tune, custom image, serving) | |
 | M4 | `nano-12b-v2-vl` LoRA → merged → Custom LLM Serving | |

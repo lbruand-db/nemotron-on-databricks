@@ -45,7 +45,7 @@ tools/air_wait.sh <JOB_RUN_ID>
 This step does four things:
 1. Packages the NVIDIA code (at its pinned revision), the fine-tuned weights and `nemotron_dbx` as an MLflow pyfunc.
 2. Runs a smoke test on a test page.
-3. Registers a new model version with `env_pack="databricks_model_serving"`.
+3. Registers a new model version. The serving image is built from pinned pip requirements; `env_pack` is off because it crash-looped on Model Serving (SPEC OQ-17).
 4. Prints `REGISTRATION_RESULT={...}` with the version.
 
 ### 3. Deploy and query (local)
@@ -66,6 +66,20 @@ The endpoint takes base64 images (`dataframe_records: [{"image", "id"}]`) and re
 `params.conf_threshold >= 0` replaces NVIDIA's per-class thresholds with one global threshold.
 
 ## Results
+
+Observed on 2026-11-11 (`fevm-am-rag-fevm`, 1× A10; HF revision `df62dbb6`, DocLayNet v1.2 revision `0daf9310`):
+
+| Split | Metric | Base | Fine-tuned |
+|---|---|---|---|
+| test (300 pages) | mAP@[.5:.95] | 0.211 | **0.635** |
+| | mAP@.5 | 0.433 | 0.837 |
+| | AP table / title / text / header_footer | 0.53 / 0.14 / 0.07 / 0.10 | 0.79 / 0.54 / 0.78 / 0.44 |
+| val (200 pages) | mAP@[.5:.95] | 0.183 | 0.599 |
+
+- **Training:** 22 min end to end: 3.9 min data prep (first run only, then cached), 17 min for 8 epochs.
+- **Registration:** ~2 min.
+- **Serving:** endpoint `GPU_SMALL` (T4) was ready in < 25 min. A cold start from zero took ~2 min; warm, 3 pages took ~5 s round trip from a laptop.
+
 
 The AIR MLflow run contains:
 - the parameters;

@@ -29,7 +29,9 @@ parameters:
   source_training_run_id: ""
   # Requires USE CATALOG, USE SCHEMA, CREATE MODEL on the target schema.
   registered_model_name: am_rag_fevm_catalog.nemotron.nemotron_page_elements_v3_ft
-  env_pack: true
+  # env_pack=true (pack the AIR environment) crash-loops / times out for this classic pyfunc on Model Serving
+  # (SPEC OQ-17); the default builds the serving image from pinned pip requirements instead.
+  env_pack: false
 
 max_retries: 0
 timeout_minutes: 45

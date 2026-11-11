@@ -19,7 +19,7 @@ from nemotron_dbx.lifecycle.register import register_detector
 class Params:
     source_training_run_id: str
     registered_model_name: str
-    env_pack: bool = True
+    env_pack: bool = False  # see register.yaml / SPEC OQ-17
 
 
 def main() -> None:
