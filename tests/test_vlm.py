@@ -255,3 +255,28 @@ def test_image_processor_rescale_patch():
     # (200/255 - 0.48145466) / 0.26862954 for the red channel of a flat image
     assert fixed[:, 0].mean().item() == pytest.approx((200 / 255 - 0.48145466) / 0.26862954, abs=1e-2)
     assert not compat.fix_image_rescale(proc.image_processor)  # idempotent
+
+
+def test_vllm_pyfunc_predict_contract():
+    import base64
+
+    import pandas as pd
+
+    from nemotron_dbx.vlm.serving import VLLMChatModel
+
+    class FakeServer:
+        def batch_chat(self, convs, concurrency, max_tokens):
+            self.convs, self.max_tokens = convs, max_tokens
+            return [{"text": json.dumps(GT), "usage": {"completion_tokens": 9}, "latency_s": 1.0},
+                    {"text": "not json", "latency_s": 0.5, "error": "boom"}]
+
+    m = VLLMChatModel()
+    m.server = FakeServer()
+    img = base64.b64encode(_png()).decode()
+    df = pd.DataFrame([{"image": img, "id": "a"}, {"image": img, "id": "b", "instruction": "Only the total."}])
+    out = m.predict(None, df, params={"max_tokens": 64})
+    assert [o["id"] for o in out] == ["a", "b"] and m.server.max_tokens == 64
+    assert out[0]["fields"] == GT and out[0]["json_valid"] and out[0]["usage"] == {"completion_tokens": 9}
+    assert out[1]["fields"] is None and not out[1]["json_valid"] and out[1]["error"] == "boom"
+    texts = [c[1]["content"][1]["text"] for c in m.server.convs]
+    assert texts == [INSTRUCTION, "Only the total."]  # NaN instruction in row a falls back to the default

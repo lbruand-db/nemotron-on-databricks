@@ -1,0 +1,25 @@
+# M4 spike: CPU architecture of the AIR node that registers models (env_pack packages this environment).
+experiment_name: nemotron-spike-arch
+
+environment:
+  version: databricks_ai_v6
+
+compute:
+  accelerator_type: GPU_1xA10
+  num_accelerators: 1
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - recipes/spikes/arch
+
+max_retries: 0
+timeout_minutes: 15
+
+command: |
+  uname -m; python -c "import platform, sys; print('platform.machine', platform.machine(), sys.version)"
+  head -20 /proc/cpuinfo | grep -E "model name|vendor_id|CPU implementer" || true
+  file "$(which python)" 2>/dev/null || true
+  nvidia-smi --query-gpu=name,driver_version --format=csv

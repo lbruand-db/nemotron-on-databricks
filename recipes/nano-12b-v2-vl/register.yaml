@@ -6,7 +6,7 @@ experiment_name: nemotron-nano-12b-v2-vl
 mlflow_run_name: nano-vl-register
 
 environment:
-  # The serving environment is this one (env_pack), so don't install anything on top of it here.
+  # custom_llm serving packs this environment (env_pack), so don't install anything on top of it here.
   version: databricks_ai_v6
 
 compute:
@@ -29,6 +29,11 @@ parameters:
   source_training_run_id: ""
   # Requires USE CATALOG, USE SCHEMA, CREATE MODEL on the target schema.
   registered_model_name: am_rag_fevm_catalog.nemotron.nemotron_nano_12b_v2_vl_ft
+  # pyfunc: classic pyfunc running vLLM in the container (pinned pip env, no env_pack).
+  # custom_llm: Custom LLM Serving (vLLM entrypoint + env_pack); blocked on the test workspace (SPEC OQ-5).
+  serving: pyfunc
+  # Extra vLLM flags for the serving entrypoint (also used by the smoke test), e.g. --enforce-eager.
+  vllm_extra_args: ""
 
 max_retries: 0
 timeout_minutes: 90

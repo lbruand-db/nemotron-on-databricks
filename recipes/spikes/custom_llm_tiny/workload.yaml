@@ -1,0 +1,26 @@
+# M4 isolation spike: cookbook-identical Custom LLM Serving registration of base Qwen2.5-0.5B-Instruct.
+experiment_name: nemotron-spike-custom-llm-tiny
+
+environment:
+  version: databricks_ai_v6
+
+compute:
+  accelerator_type: GPU_1xA10
+  num_accelerators: 1
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - recipes/spikes/custom_llm_tiny
+
+env_variables:
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+
+max_retries: 0
+timeout_minutes: 45
+
+command: |
+  cd "$CODE_SOURCE_PATH"
+  python -u recipes/spikes/custom_llm_tiny/register_tiny.py

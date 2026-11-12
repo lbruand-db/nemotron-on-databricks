@@ -225,6 +225,7 @@ def register_vlm(
     smoke_sample,
     source_training_run_id: str | None = None,
     extra_tags: dict[str, str] | None = None,
+    vllm_extra_args: tuple[str, ...] = (),
 ) -> RegistrationResult:
     """Register merged Nano VL weights for Custom LLM Serving (vLLM entrypoint, cookbook pattern).
 
@@ -259,7 +260,7 @@ def register_vlm(
     mlflow.set_registry_uri("databricks-uc")
     os.environ["MLFLOW_USE_DATABRICKS_SDK_MODEL_ARTIFACTS_REPO_FOR_UC"] = "true"
     served_name = registered_model_name.rsplit(".", 1)[-1]
-    cfg = VLLMConfig()
+    cfg = VLLMConfig(extra_args=tuple(vllm_extra_args))  # e.g. ("--enforce-eager",): faster startup
     work = scratch_dir("register-vlm")
     local = work / ARTIFACT_NAME
     if local.exists():
@@ -315,4 +316,92 @@ def register_vlm(
     finally:
         os.chdir(cwd)
     n_fields = len(flatten(normalize(parsed)))
+    return RegistrationResult(registered_model_name, str(version.version), info.model_uri, n_fields)
+
+
+def register_vlm_pyfunc(
+    merged_dir: str | Path,
+    registered_model_name: str,
+    smoke_sample,
+    source_training_run_id: str | None = None,
+    extra_tags: dict[str, str] | None = None,
+    vllm_extra_args: tuple[str, ...] = (),
+) -> RegistrationResult:
+    """Register merged Nano VL weights as a **classic pyfunc** (no `env_pack`): `VLLMChatModel` starts the vLLM
+    OpenAI server inside the serving container. This is the fallback while `env_pack` deployments fail on the
+    workspace (SPEC OQ-5/OQ-17). The serving environment is built from pinned pip requirements (vLLM, transformers,
+    torch with its CUDA tag) taken from this AIR environment.
+    """
+    from importlib.metadata import version as pkg_version
+
+    import mlflow
+    import pandas as pd
+    from mlflow.models import infer_signature
+
+    from ..vlm.serving import PYFUNC_PORT, SERVING_PARAMS, VLLMChatModel
+    from ..vlm.vllm_server import VLLMConfig
+
+    if not os.environ.get("DATABRICKS_ACCELERATOR"):
+        raise RuntimeError("Register from an AI Runtime GPU task: the smoke test starts vLLM.")
+    mlflow.set_registry_uri("databricks-uc")
+    os.environ["MLFLOW_USE_DATABRICKS_SDK_MODEL_ARTIFACTS_REPO_FOR_UC"] = "true"
+    cfg = VLLMConfig(extra_args=tuple(vllm_extra_args))
+    with tempfile.TemporaryDirectory(prefix="nemotron-register-vlm-") as tmp:
+        config_path = Path(tmp) / "config.json"
+        config_path.write_text(json.dumps({
+            "port": PYFUNC_PORT, "startup_timeout_s": 1800,
+            "vllm": {"max_model_len": cfg.max_model_len, "gpu_memory_utilization": cfg.gpu_memory_utilization,
+                     "max_num_seqs": cfg.max_num_seqs, "extra_args": list(cfg.extra_args)},
+        }, indent=2))
+        artifacts = {"model_dir": str(merged_dir), "config": str(config_path)}
+
+        # Smoke test: the pyfunc exactly as serving will run it (load_context starts vLLM; predict per record).
+        model = VLLMChatModel()
+        t0 = time.monotonic()
+        model.load_context(SimpleNamespace(artifacts=artifacts))
+        try:
+            df = pd.DataFrame([{"image": base64.b64encode(smoke_sample.image).decode(), "id": "smoke-0"}])
+            out = model.predict(None, df, params=SERVING_PARAMS)
+        finally:
+            model.server.__exit__(None, None, None)
+        print(f"[register] pyfunc smoke ({time.monotonic() - t0:.0f}s incl. vLLM start): {str(out)[:500]}", flush=True)
+        if not out or not out[0]["json_valid"]:
+            raise RuntimeError(f"Smoke test did not return valid JSON: {str(out)[:500]}")
+        try:
+            signature = infer_signature(df, out, params=SERVING_PARAMS)
+        except Exception as exc:  # noqa: BLE001 - nested dict outputs
+            print(f"Output signature inference failed ({exc!r}); logging input/params signature only")
+            signature = infer_signature(df, params=SERVING_PARAMS)
+
+        extra = ("vllm", "transformers", "tokenizers", "safetensors", "requests")
+        reqs = _pip_requirements(extra=extra, exact_torch=True)
+        print(f"[register] vllm {pkg_version('vllm')}; pip requirements: {reqs}", flush=True)
+        run_id = os.environ.get("MLFLOW_RUN_ID")
+        with mlflow.start_run(run_id=run_id) if run_id else mlflow.start_run() as run:
+            t1 = time.monotonic()
+            info = mlflow.pyfunc.log_model(
+                name="model",
+                python_model=VLLMChatModel(),
+                artifacts=artifacts,
+                code_paths=[str(package_dir())],
+                signature=signature,  # no input_example: validating it would start a second vLLM at log time
+                pip_requirements=reqs,
+            )
+            version = mlflow.register_model(info.model_uri, registered_model_name)  # no env_pack
+            print(f"[register] logged + registered v{version.version} in {time.monotonic() - t1:.0f}s", flush=True)
+            mlflow.set_tags({
+                "nemotron.spec": "nano_12b_v2_vl",
+                "nemotron.serving": "pyfunc",
+                "nemotron.registered_model": registered_model_name,
+                "nemotron.registered_version": str(version.version),
+                "nemotron.pip_requirements": " | ".join(reqs),
+                **({"nemotron.source_training_run_id": source_training_run_id} if source_training_run_id else {}),
+                **(extra_tags or {}),
+            })
+            if source_training_run_id:
+                client = mlflow.MlflowClient()
+                client.set_tag(source_training_run_id, "nemotron.registered_model", registered_model_name)
+                client.set_tag(source_training_run_id, "nemotron.registered_version", str(version.version))
+                client.set_tag(source_training_run_id, "nemotron.packaging_run_id", run.info.run_id)
+    n_fields = len(out[0]["fields"] or {})
     return RegistrationResult(registered_model_name, str(version.version), info.model_uri, n_fields)

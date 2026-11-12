@@ -47,35 +47,58 @@ def vllm_command(model: str, served_model_name: str, port: int, cfg: VLLMConfig 
 
 @dataclass
 class VLLMServer:
-    """Start a local vLLM server (context manager); `chat()` sends one OpenAI chat request."""
+    """Start a local vLLM server (context manager); `chat()` sends one OpenAI chat request.
+
+    `log_path=None` streams vLLM's output to this process's stdout (Model Serving shows it in the endpoint logs).
+    With `reuse_running`, a healthy server already on `port` is reused instead of starting a second one. A file
+    lock serialises the check-and-start, in case the serving container runs several workers.
+    """
 
     model: str
     served_model_name: str = "nano-vl"
     port: int = 3080  # AIR allows 3000-3999 for local servers
     cfg: VLLMConfig = field(default_factory=VLLMConfig)
-    log_path: Path = Path("/tmp/vllm.log")
+    log_path: Path | None = Path("/tmp/vllm.log")
     startup_timeout_s: int = 1800
     cwd: str | None = None
+    reuse_running: bool = False
     startup_s: float = 0.0
 
-    def __enter__(self) -> VLLMServer:
+    def healthy(self) -> bool:
         import requests
 
+        try:
+            return requests.get(f"http://127.0.0.1:{self.port}/health", timeout=2).ok
+        except requests.RequestException:
+            return False
+
+    def __enter__(self) -> VLLMServer:
+        self._proc, self._log = None, None
+        if not self.reuse_running:
+            return self._start()
+        import fcntl
+
+        with open(f"/tmp/nemotron_vllm_{self.port}.lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if self.healthy():
+                print(f"[vllm] reusing the server already running on port {self.port}", flush=True)
+                return self
+            return self._start()
+
+    def _start(self) -> VLLMServer:
         cmd = vllm_command(self.model, self.served_model_name, self.port, self.cfg, python=sys.executable)
         print("[vllm] " + " ".join(cmd), flush=True)
         t0 = time.monotonic()
-        self._log = self.log_path.open("w")
-        self._proc = subprocess.Popen(cmd, stdout=self._log, stderr=subprocess.STDOUT, cwd=self.cwd,
+        out = None
+        if self.log_path is not None:
+            self._log = self.log_path.open("w")
+            out = self._log
+        self._proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT if out else None, cwd=self.cwd,
                                       env={**os.environ})
         deadline = t0 + self.startup_timeout_s
-        while True:
+        while not self.healthy():
             if self._proc.poll() is not None:
                 raise RuntimeError(f"vLLM exited with {self._proc.returncode}:\n{self.tail()}")
-            try:
-                if requests.get(f"http://127.0.0.1:{self.port}/health", timeout=2).ok:
-                    break
-            except requests.RequestException:
-                pass
             if time.monotonic() > deadline:
                 self.__exit__(None, None, None)
                 raise TimeoutError(f"vLLM not healthy after {self.startup_timeout_s}s:\n{self.tail()}")
@@ -85,16 +108,20 @@ class VLLMServer:
         return self
 
     def __exit__(self, *exc) -> None:
-        self._proc.terminate()
-        try:
-            self._proc.wait(timeout=60)
-        except subprocess.TimeoutExpired:
-            self._proc.kill()
-            self._proc.wait()
-        self._log.close()
+        if self._proc is not None:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait()
+        if self._log is not None:
+            self._log.close()
 
     def tail(self, n: int = 12000) -> str:
-        return self.log_path.read_text(errors="replace")[-n:] if self.log_path.exists() else ""
+        if self.log_path is None or not self.log_path.exists():
+            return "(vLLM output went to stdout)"
+        return self.log_path.read_text(errors="replace")[-n:]
 
     def chat(self, messages: list[dict], max_tokens: int = 1536, temperature: float = 0.0) -> dict:
         import requests
