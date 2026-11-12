@@ -9,7 +9,7 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "pycocotools", "pyyaml"]
+dev = ["pytest", "ruff", "pycocotools", "pyyaml", "transformers==5.8.1", "peft==0.19.1", "zss==1.2.0"]
 
 [build-system]
 requires = ["hatchling"]

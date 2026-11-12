@@ -1,5 +1,19 @@
 # Nemotron on Databricks
 
+[![Databricks AI Runtime](https://img.shields.io/badge/Databricks-AI%20Runtime-FF3621?logo=databricks&logoColor=white)](https://docs.databricks.com/aws/en/machine-learning/ai-runtime/)
+[![Model Serving](https://img.shields.io/badge/Databricks-Model%20Serving-FF3621?logo=databricks&logoColor=white)](https://docs.databricks.com/aws/en/machine-learning/model-serving/)
+[![Unity Catalog](https://img.shields.io/badge/Unity%20Catalog-models%20%26%20volumes-FF3621?logo=databricks&logoColor=white)](https://docs.databricks.com/aws/en/data-governance/unity-catalog/)
+[![NVIDIA Nemotron](https://img.shields.io/badge/NVIDIA-Nemotron-76B900?logo=nvidia&logoColor=white)](https://huggingface.co/nvidia)
+[![Models license](https://img.shields.io/badge/models-NVIDIA%20Open%20Model%20License-76B900)](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/)
+<br>
+[![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![PyTorch 2.11](https://img.shields.io/badge/PyTorch-2.11%20(cu130)-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![vLLM 0.24](https://img.shields.io/badge/vLLM-0.24-30A2FF)](https://github.com/vllm-project/vllm)
+[![MLflow 3](https://img.shields.io/badge/MLflow-3.13-0194E2?logo=mlflow&logoColor=white)](https://mlflow.org/)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Tests: pytest](https://img.shields.io/badge/tests-pytest%20(CPU)-0A9EDC?logo=pytest&logoColor=white)](tests/)
+[![Last commit](https://img.shields.io/github/last-commit/lbruand-db/nemotron-on-databricks)](https://github.com/lbruand-db/nemotron-on-databricks/commits/main)
+
 This cookbook fine-tunes and serves NVIDIA's open **Nemotron document-intelligence models** on Databricks. Those models are the ones behind the NeMo Retriever extraction NIMs, used here through their open Hugging Face weights. Training runs on **AI Runtime (AIR)** serverless GPUs, and serving runs on **Model Serving**, governed by **Unity Catalog**.
 
 Each recipe follows the same three stages:
@@ -23,7 +37,7 @@ The handoff between stages is the Volume path plus the training run's MLflow run
 | [nemotron-page-elements-v3](https://huggingface.co/nvidia/nemotron-page-elements-v3) | Page layout detection (table, chart, title, infographic, text, header/footer) | YOLOX-L, 54 M | Full fine-tune, SimOTA loss | DocLayNet v1.2 | GPU pyfunc | ✅ [done](recipes/page-elements-v3/): test mAP 0.21 → 0.64 |
 | [nemotron-table-structure-v1](https://huggingface.co/nvidia/nemotron-table-structure-v1) | Table cells, rows and columns | YOLOX-L, 54 M | Full fine-tune | PubTables-1M | GPU pyfunc | planned |
 | [nemotron-graphic-elements-v1](https://huggingface.co/nvidia/nemotron-graphic-elements-v1) | Chart titles, axes, legends and labels | YOLOX-L, 54 M | Full fine-tune | Synthetic charts | GPU pyfunc | planned |
-| [nemotron-ocr-v1](https://huggingface.co/nvidia/nemotron-ocr-v1) | OCR: text detection, recognition and reading order | RegNetY detector + CTC recognizer + relational model, 52 M | Recognizer only | CORD-v2 | GPU pyfunc + C++/CUDA extension | ✅ [done](recipes/ocr-v1/): CER 4.95 % → 1.63 % |
+| [nemotron-ocr-v1](https://huggingface.co/nvidia/nemotron-ocr-v1) | OCR: text detection, recognition and reading order | RegNetY detector + Transformer recognizer + relational model, 52 M | Recognizer only | CORD-v2 | GPU pyfunc + C++/CUDA extension | ✅ [done](recipes/ocr-v1/): CER 4.95 % → 1.63 % |
 | [nemotron-nano-12b-v2-vl](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16) | Document visual Q&A and extraction | RADIO + hybrid Mamba-Transformer, 12.6 B | LoRA (HF + PEFT) | CORD-v2 → JSON | Custom LLM Serving (vLLM) | planned |
 
 All five models are under the [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/), which allows commercial use. The datasets are CC-BY-4.0, CDLA-Permissive or synthetic.

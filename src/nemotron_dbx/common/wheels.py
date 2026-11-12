@@ -21,15 +21,18 @@ def torch_tag() -> str:
     return "torch" + torch.__version__.replace("+", "_")
 
 
-def cached_wheel(cache_dir: Path) -> Path | None:
-    wheels = sorted(cache_dir.glob("*.whl"))
+def cached_wheel(cache_dir: Path, prefix: str = "") -> Path | None:
+    wheels = sorted(cache_dir.glob(f"{prefix}*.whl"))
     return wheels[-1] if wheels else None
 
 
-def ensure_wheel(source_dir: str | Path, cache_dir: str | Path, env: dict[str, str] | None = None) -> Path:
-    """Return a cached wheel for `source_dir`, building it into `cache_dir` if missing."""
+def ensure_wheel(
+    source_dir: str | Path, cache_dir: str | Path, env: dict[str, str] | None = None, prefix: str = ""
+) -> Path:
+    """Return a cached wheel for `source_dir` (a directory or a pip requirement such as `pkg==1.2`), building it
+    into `cache_dir` if missing. `prefix` (e.g. `causal_conv1d-1.6.2.post1-`) restricts cache hits to one version."""
     cache_dir = Path(cache_dir)
-    hit = cached_wheel(cache_dir)
+    hit = cached_wheel(cache_dir, prefix)
     if hit:
         print(f"[wheels] cache hit: {hit}", flush=True)
         return hit

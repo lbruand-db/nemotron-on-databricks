@@ -1,5 +1,7 @@
 """Package a fine-tuned detector as an MLflow pyfunc, smoke-test it, and register it in Unity Catalog.
 
+Nano VL is the exception: `register_vlm` packages it for Custom LLM Serving (vLLM entrypoint, `env_pack`).
+
 Runs inside an AIR GPU workload (`recipes/<model>/register.yaml`). The serving environment is built from
 pinned pip requirements (versions taken from the AIR environment). `env_pack="databricks_model_serving"`
 is optional: for these classic pyfuncs it made endpoints crash-loop or time out (SPEC OQ-17).
@@ -12,6 +14,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,7 +29,7 @@ class RegistrationResult:
     model_name: str
     model_version: str
     model_uri: str
-    smoke_boxes: int
+    smoke_items: int  # boxes (detectors), regions (OCR), extracted JSON fields (VLM)
 
 
 def package_dir() -> Path:
@@ -214,3 +217,102 @@ def register_ocr(
             client.set_tag(source_training_run_id, "nemotron.registered_version", str(version.version))
             client.set_tag(source_training_run_id, "nemotron.packaging_run_id", run.info.run_id)
     return RegistrationResult(registered_model_name, str(version.version), info.model_uri, n_regions)
+
+
+def register_vlm(
+    merged_dir: str | Path,
+    registered_model_name: str,
+    smoke_sample,
+    source_training_run_id: str | None = None,
+    extra_tags: dict[str, str] | None = None,
+) -> RegistrationResult:
+    """Register merged Nano VL weights for Custom LLM Serving (vLLM entrypoint, cookbook pattern).
+
+    1. Copy the weights to local disk under the artifact name the entrypoint uses.
+    2. Smoke-test vLLM with the exact serving flags, from that folder (as Model Serving runs it), offline.
+    3. Log the placeholder ChatModel with `task: llm/v1/chat` + `entrypoint` metadata, then register it with
+       `env_pack="databricks_model_serving"` (required for Custom LLM Serving; see OQ-17 for classic pyfuncs).
+    """
+    from importlib.metadata import version as pkg_version
+
+    import mlflow
+    from packaging.version import Version
+
+    from ..common.paths import scratch_dir
+    from ..vlm.data import INSTRUCTION, openai_messages
+    from ..vlm.metrics import flatten, normalize, parse_json_output
+    from ..vlm.serving import ARTIFACT_NAME, EntrypointModel
+    from ..vlm.vllm_server import VLLMConfig, VLLMServer, vllm_command
+
+    if not os.environ.get("DATABRICKS_ACCELERATOR"):
+        raise RuntimeError("Custom LLM models must be logged from an AI Runtime GPU task.")
+    if Version(mlflow.__version__) < Version("3.12") or Version(pkg_version("databricks-sdk")) < Version("0.102.0"):
+        raise RuntimeError("Custom LLM Serving needs mlflow >= 3.12 and databricks-sdk >= 0.102.0")
+    try:  # FlashInfer JIT kernels (attention backends) need the ninja executable, as in the cookbook
+        import ninja
+
+        os.environ["PATH"] = str(ninja.BIN_DIR) + os.pathsep + os.environ["PATH"]
+        extra_reqs = [f"mlflow=={mlflow.__version__}", f"ninja=={pkg_version('ninja')}"]
+    except ImportError:
+        extra_reqs = [f"mlflow=={mlflow.__version__}"]
+
+    mlflow.set_registry_uri("databricks-uc")
+    os.environ["MLFLOW_USE_DATABRICKS_SDK_MODEL_ARTIFACTS_REPO_FOR_UC"] = "true"
+    served_name = registered_model_name.rsplit(".", 1)[-1]
+    cfg = VLLMConfig()
+    work = scratch_dir("register-vlm")
+    local = work / ARTIFACT_NAME
+    if local.exists():
+        shutil.rmtree(local)
+    t0 = time.monotonic()
+    shutil.copytree(merged_dir, local)
+    print(f"[register] copied {merged_dir} -> {local} in {time.monotonic() - t0:.0f}s", flush=True)
+
+    with VLLMServer(ARTIFACT_NAME, served_model_name=served_name, port=3080, cfg=cfg, cwd=str(work),
+                    log_path=work / "vllm.log") as server:
+        out = server.chat(openai_messages(smoke_sample.data_url()), max_tokens=1536)
+    answer = out["choices"][0]["message"]["content"] or ""
+    parsed = parse_json_output(answer)
+    print(f"[register] smoke answer ({out.get('usage')}): {answer[:400]}", flush=True)
+    if parsed is None:
+        raise RuntimeError(f"Smoke test did not return valid JSON: {answer[:500]}")
+
+    entrypoint = " ".join(vllm_command(ARTIFACT_NAME, served_name, 8080, cfg))
+    cwd = Path.cwd()
+    os.chdir(work)
+    try:
+        run_id = os.environ.get("MLFLOW_RUN_ID")
+        with mlflow.start_run(run_id=run_id) if run_id else mlflow.start_run() as run:
+            info = mlflow.pyfunc.log_model(
+                name=served_name,
+                python_model=EntrypointModel(),
+                artifacts={"model_dir": ARTIFACT_NAME},
+                code_paths=[str(package_dir())],
+                metadata={
+                    "task": "llm/v1/chat",
+                    "entrypoint": entrypoint,
+                    "source_training_run_id": source_training_run_id or "",
+                    "cord_instruction": INSTRUCTION,
+                },
+                extra_pip_requirements=extra_reqs,
+            )
+            t1 = time.monotonic()
+            version = mlflow.register_model(info.model_uri, registered_model_name, env_pack="databricks_model_serving")
+            print(f"[register] registered v{version.version} in {time.monotonic() - t1:.0f}s", flush=True)
+            mlflow.set_tags({
+                "nemotron.spec": "nano_12b_v2_vl",
+                "nemotron.registered_model": registered_model_name,
+                "nemotron.registered_version": str(version.version),
+                "nemotron.entrypoint": entrypoint,
+                **({"nemotron.source_training_run_id": source_training_run_id} if source_training_run_id else {}),
+                **(extra_tags or {}),
+            })
+            if source_training_run_id:
+                client = mlflow.MlflowClient()
+                client.set_tag(source_training_run_id, "nemotron.registered_model", registered_model_name)
+                client.set_tag(source_training_run_id, "nemotron.registered_version", str(version.version))
+                client.set_tag(source_training_run_id, "nemotron.packaging_run_id", run.info.run_id)
+    finally:
+        os.chdir(cwd)
+    n_fields = len(flatten(normalize(parsed)))
+    return RegistrationResult(registered_model_name, str(version.version), info.model_uri, n_fields)

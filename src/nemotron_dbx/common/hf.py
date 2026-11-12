@@ -12,14 +12,16 @@ class HFSource:
     revision: str
     repo_type: str = "model"
 
-    def snapshot(self, local_dir: str | Path, allow_patterns: list[str] | None = None) -> Path:
+    def snapshot(self, local_dir: str | Path | None, allow_patterns: list[str] | None = None) -> Path:
+        """Download to `local_dir`, or into the HF cache if None (then `from_pretrained(repo_id, revision=...)`
+        is served from that cache)."""
         from huggingface_hub import snapshot_download
 
         path = snapshot_download(
             repo_id=self.repo_id,
             revision=self.revision,
             repo_type=self.repo_type,
-            local_dir=str(local_dir),
+            local_dir=str(local_dir) if local_dir else None,
             allow_patterns=allow_patterns,
         )
         return Path(path)
@@ -43,3 +45,10 @@ DOCLAYNET_V1_2 = HFSource(
 )
 NEMOTRON_OCR_V1 = HFSource("nvidia/nemotron-ocr-v1", "8657d08d3279f4864002d5fd3fdcd47ad8c96bcb")
 CORD_V2 = HFSource("naver-clova-ix/cord-v2", "7f0115a4b758a71d6473b8d085751692da2fef98", repo_type="dataset")
+NANO_VL_V2 = HFSource("nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16", "ca9543b126e8bf3176916d3d305ccc415f89fd4d")
+# Nano VL's config.json references remote code in two other repos without a revision (`repo--module.Class`);
+# `nemotron_dbx.vlm.compat.pin_remote_code` pins them for HF training. vLLM uses its own implementation.
+NANO_VL_V2_REMOTE_CODE = {
+    "nvidia/C-RADIOv2-H": "0d8f4c18c877166eda07ddae1386bcad256b7a6a",
+    "nvidia/NVIDIA-Nemotron-Nano-12B-v2-Base": "78dc93a79e2533922ac8ad2c16f79b7fb747970d",
+}

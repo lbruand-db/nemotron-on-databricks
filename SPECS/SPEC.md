@@ -416,7 +416,7 @@ All spikes live in `recipes/spikes/` and are launched from the repo root with `d
 - `causal-conv1d`'s `setup.py` **ignores `TORCH_CUDA_ARCH_LIST`**. It always compiles ~9 archs (sm_75…sm_121), which takes ~11 min and produces a 205 MB wheel. Acceptable as a one-off. To make it faster, patch `cc_flag` to sm_90 only.
 - Upstream prebuilt wheels exist only up to `cu13torch2.10`, and ai_v6 has torch 2.11, so they're not used.
 
-### 11.3 Nano VL remote-code compatibility patches (→ `nemotron_dbx/vlm/compat.py`)
+### 11.3 Nano VL remote-code compatibility patches (`nemotron_dbx/vlm/compat.py`, `vlm/env.py`)
 
 | # | Symptom | Patch |
 |---|---|---|
@@ -430,6 +430,9 @@ All spikes live in `recipes/spikes/` and are launched from the repo root with `d
 | 8 | `NemotronHCausalLMOutput has no attribute 'past_key_values'` | Set `NemotronHCausalLMOutput.past_key_values = None` (class attribute) |
 | 9 | `a view of a leaf Variable that requires grad is being used in an in-place operation` | Remove every `_require_grads_hook` (PEFT/transformers add them for checkpointing). Non-reentrant checkpointing doesn't need them. |
 | 10 | `torch.distributed.get_rank()` inside `forward` | Always launch with `torchrun` (process group initialized, even on 1 GPU) |
+| 11 | **Silent:** the model learns to ignore the image (train loss plateaus at ~0.5, and every fine-tuned answer collapses to a one-item `"menu": {…}`). The remote image processor's `_process_image` hook (`T.ToTensor()` → [0, 1]) is never called: transformers 5 renamed the hook to `process_image`, which returns uint8 [0, 255]. The tiles are then mean/std-normalized at 255× scale. vLLM preprocesses on its own and is unaffected, so base eval looked fine. Found in M4. | Wrap the instance's `process_image` to divide uint8 output by 255 (`compat.fix_image_rescale`). `data.check_pixel_values` fails fast if \|x\| > 10. The M0 spike (e) also trained on unnormalized pixels. |
+| 12 | `FileNotFoundError: …/transformers_modules/<local>/…/configuration_nemotron_h.py` when loading from a **local directory**: for local paths, transformers 5.8.1 copies only the *direct* relative imports of `modeling.py` into its module cache, then follows transitive ones. | Snapshot into the HF cache and load by **repo ID + pinned revision**. vLLM and the merge use the snapshot path. |
+| 13 | `config.json` points the LLM and vision remote code at **other repos without a revision** (`nvidia/NVIDIA-Nemotron-Nano-12B-v2-Base--…`, `nvidia/C-RADIOv2-H--…`), i.e. their `main` branch. | `compat.pin_remote_code` injects `code_revision` for those repos (pins in `common/hf.py`) |
 
 - All patches must be **unit-tested** on CPU where possible (patches 6–9 with a tiny config) and **version-guarded**, so they turn into no-ops if upstream fixes land.
 - Pin the HF revision of `nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16` (`ca9543b126e8bf3176916d3d305ccc415f89fd4d` at the time of the spikes) and of `nvidia/C-RADIOv2-H` (`0d8f4c18c877166eda07ddae1386bcad256b7a6a`).

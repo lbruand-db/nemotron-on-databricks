@@ -1,0 +1,59 @@
+# Stage 1: LoRA fine-tune Nemotron Nano 12B v2 VL on CORD-v2 receipt extraction (vision tower frozen),
+# evaluate base vs fine-tuned with vLLM, merge the adapter. Run from the repo root:
+#   databricks air run -f recipes/nano-12b-v2-vl/workload.yaml
+experiment_name: nemotron-nano-12b-v2-vl
+
+mlflow_run_name: nano-vl-cord-lora
+
+environment:
+  version: databricks_ai_v6
+
+compute:
+  # Measured peak 34.6 GB (M0). GPU_8xH100 also works: the global batch is split across GPUs.
+  accelerator_type: GPU_1xH100
+  num_accelerators: 1
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../..
+    include_paths:
+      - src
+      - recipes/nano-12b-v2-vl
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+  HF_HUB_ENABLE_HF_TRANSFER: "0"
+  # FlashInfer's sampler JIT needs curand.h, which the AIR image lacks.
+  VLLM_USE_FLASHINFER_SAMPLER: "0"
+  MAX_JOBS: "16"
+
+parameters:
+  # Durable outputs (adapter + ~25 GB merged checkpoint). Must be an existing writable Volume directory.
+  output_root: /Volumes/am_rag_fevm_catalog/nemotron/artifacts/nano-12b-v2-vl
+  # Build-once cache for the causal-conv1d CUDA wheel (first build ~11 min).
+  wheel_cache: /Volumes/am_rag_fevm_catalog/nemotron/artifacts/wheels
+  train_items: 0
+  val_items: 0
+  test_items: 0
+  eval_val: true
+  epochs: 2
+  global_batch: 16
+  lr: 0.0001
+  lora_rank: 32
+  lora_alpha: 64
+  max_len: 4096
+  max_tiles: 12
+  max_train_minutes: 50
+  eval_concurrency: 16
+  save_merged: true
+  seed: 0
+
+max_retries: 0
+timeout_minutes: 180
+
+command: |
+  cd "$CODE_SOURCE_PATH"
+  export PYTHONPATH="$CODE_SOURCE_PATH/src:${PYTHONPATH:-}"
+  python -u recipes/nano-12b-v2-vl/train.py
