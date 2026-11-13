@@ -36,9 +36,9 @@ The handoff between stages is the Volume path plus the training run's MLflow run
 |---|---|---|---|---|---|---|
 | [nemotron-page-elements-v3](https://huggingface.co/nvidia/nemotron-page-elements-v3) | Page layout detection (table, chart, title, infographic, text, header/footer) | YOLOX-L, 54 M | Full fine-tune, SimOTA loss | DocLayNet v1.2 | GPU pyfunc | ✅ [done](recipes/page-elements-v3/): test mAP 0.21 → 0.64 |
 | [nemotron-table-structure-v1](https://huggingface.co/nvidia/nemotron-table-structure-v1) | Table cells, rows and columns | YOLOX-L, 54 M | Full fine-tune | PubTables-1M | GPU pyfunc | ✅ [done](recipes/table-structure-v1/): test mAP 0.49 → 0.86 |
-| [nemotron-graphic-elements-v1](https://huggingface.co/nvidia/nemotron-graphic-elements-v1) | Chart titles, axes, legends and labels | YOLOX-L, 54 M | Full fine-tune | Synthetic charts | GPU pyfunc | ✅ [trained](recipes/graphic-elements-v1/): synthetic test mAP 0.40 → 0.84 (endpoint deploying) |
+| [nemotron-graphic-elements-v1](https://huggingface.co/nvidia/nemotron-graphic-elements-v1) | Chart titles, axes, legends and labels | YOLOX-L, 54 M | Full fine-tune | Synthetic charts | GPU pyfunc | ✅ [done](recipes/graphic-elements-v1/): synthetic test mAP 0.40 → 0.84 |
 | [nemotron-ocr-v1](https://huggingface.co/nvidia/nemotron-ocr-v1) | OCR: text detection, recognition and reading order | RegNetY detector + Transformer recognizer + relational model, 52 M | Recognizer only | CORD-v2 | GPU pyfunc + C++/CUDA extension | ✅ [done](recipes/ocr-v1/): CER 4.95 % → 1.63 % |
-| [nemotron-nano-12b-v2-vl](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16) | Document visual Q&A and extraction | RADIO + hybrid Mamba-Transformer, 12.6 B | LoRA (HF + PEFT) | CORD-v2 → JSON | vLLM in a GPU pyfunc (Custom LLM Serving blocked, SPEC OQ-5) | 🟡 [trained](recipes/nano-12b-v2-vl/): field F1 0.39 → 0.86; endpoint pending GPU capacity |
+| [nemotron-nano-12b-v2-vl](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16) | Document visual Q&A and extraction | RADIO + hybrid Mamba-Transformer, 12.6 B | LoRA (HF + PEFT) | CORD-v2 → JSON | vLLM (FP8) in a GPU pyfunc on 1× A10G (Custom LLM Serving blocked, SPEC OQ-5) | ✅ [trained and served](recipes/nano-12b-v2-vl/): field F1 0.39 → 0.86 (FP8: 0.85), ~4 s per receipt |
 
 All five models are under the [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/), which allows commercial use. The datasets are CC-BY-4.0, CDLA-Permissive or synthetic.
 
@@ -116,7 +116,7 @@ Since M0, M1 has shown that page-elements-v3 trains in 22 min on 1× A10 and ser
 
 M3 then showed that the OCR recognizer fine-tunes in under 9 min, and that its compiled C++/CUDA extension serves on a T4 endpoint, shipped as a wheel with exact torch pins (SPEC OQ-9).
 
-M4 fine-tuned Nano 12B VL with LoRA (CORD field F1 0.39 → 0.86 in 31 min on 1× H100), after fixing a silent transformers 5 image-preprocessing bug (SPEC §11.3 patch 11). Serving is not verified yet: Custom LLM Serving deployments fail before the entrypoint starts on the test workspace (also for a cookbook-identical tiny model, SPEC OQ-5), and the classic-pyfunc fallback built fine but never got a `GPU_LARGE` GPU.
+M4 fine-tuned Nano 12B VL with LoRA (CORD field F1 0.39 → 0.86 in 31 min on 1× H100), after fixing a silent transformers 5 image-preprocessing bug (SPEC §11.3 patch 11). It is served on `e2-demo-field-eng` as a classic pyfunc running vLLM with **FP8 weights on one A10G** (`GPU_MEDIUM`): field F1 0.847 vs 0.858 in bf16, ~4 s per receipt. The other two routes failed on both test workspaces. Custom LLM Serving (`env_pack`) deployments never start the entrypoint, even for a cookbook-identical tiny model (SPEC OQ-5). The 48–96 GB serving GPUs (`GPU_LARGE`, `GPU_LARGE_RTX`) never got capacity within the 2 h limit.
 
 M2 added table-structure-v1 (PubTables-1M, test mAP 0.49 → 0.86, served on T4) and graphic-elements-v1 (synthetic charts, 0.40 → 0.84). A real-chart check caught a regression that synthetic mAP hid (captions mislabelled as axis text), fixed by adding captions to the generator.
 

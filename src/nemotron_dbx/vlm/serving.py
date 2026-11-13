@@ -58,9 +58,10 @@ class VLLMChatModel(PythonModel):
         from .vllm_server import VLLMConfig, VLLMServer
 
         cfg = json.loads(Path(context.artifacts["config"]).read_text())
+        vllm_cfg = VLLMConfig(**{k: tuple(v) if isinstance(v, list) else v for k, v in cfg["vllm"].items()})
         self.server = VLLMServer(
             context.artifacts["model_dir"], served_model_name="nano-vl", port=cfg.get("port", PYFUNC_PORT),
-            cfg=VLLMConfig(**cfg["vllm"]), log_path=None, reuse_running=True,
+            cfg=vllm_cfg, log_path=None, reuse_running=True,
             startup_timeout_s=cfg.get("startup_timeout_s", 1800),
         )
         self.server.__enter__()  # runs for the life of the serving process

@@ -88,6 +88,13 @@ def test_vllm_command_has_serving_flags():
         assert flag in s
 
 
+def test_vllm_command_env_and_extra_args():
+    cfg = VLLMConfig(extra_args=("--quantization", "fp8"), env=("VLLM_TEST_FORCE_FP8_MARLIN=1",))
+    cmd = vllm_command("m", "m", 8080, cfg)
+    assert cmd[:4] == ["env", "VLLM_USE_FLASHINFER_SAMPLER=0", "HF_HUB_OFFLINE=1", "VLLM_TEST_FORCE_FP8_MARLIN=1"]
+    assert cmd[-2:] == ["--quantization", "fp8"]
+
+
 # --- training schedule ---
 
 def test_lr_schedule_and_rank_slices():

@@ -28,6 +28,23 @@ def _entity_matches(entity, desired) -> bool:
     ])
 
 
+class _RawWorkloadType(str):
+    """A workload type the installed SDK's enum doesn't list yet (e.g. GPU_LARGE_RTX); serialises like the enum."""
+
+    @property
+    def value(self) -> str:
+        return str(self)
+
+
+def workload_type(name: str):
+    from databricks.sdk.service.serving import ServingModelWorkloadType
+
+    try:
+        return ServingModelWorkloadType(name)
+    except ValueError:
+        return _RawWorkloadType(name)
+
+
 def _served(config) -> list:
     return list(config.served_entities or []) if config else []
 
@@ -65,13 +82,14 @@ def submit(client, endpoint_name: str, desired) -> str:
 
 def main(argv: list[str] | None = None) -> None:
     from databricks.sdk import WorkspaceClient
-    from databricks.sdk.service.serving import ServedEntityInput, ServingModelWorkloadType
+    from databricks.sdk.service.serving import ServedEntityInput
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model-name", required=True, help="Three-level Unity Catalog model name")
     ap.add_argument("--model-version", required=True)
     ap.add_argument("--endpoint-name", required=True)
-    ap.add_argument("--workload-type", default="GPU_SMALL", help="e.g. CPU, GPU_SMALL, GPU_MEDIUM, GPU_LARGE")
+    ap.add_argument("--workload-type", default="GPU_SMALL",
+                    help="e.g. CPU, GPU_SMALL, GPU_MEDIUM, GPU_LARGE, GPU_LARGE_RTX")
     ap.add_argument("--workload-size", default="Small")
     ap.add_argument("--no-scale-to-zero", action="store_true")
     ap.add_argument("--profile")
@@ -80,7 +98,7 @@ def main(argv: list[str] | None = None) -> None:
     desired = ServedEntityInput(
         entity_name=args.model_name,
         entity_version=str(args.model_version),
-        workload_type=ServingModelWorkloadType(args.workload_type),
+        workload_type=workload_type(args.workload_type),
         workload_size=args.workload_size,
         scale_to_zero_enabled=not args.no_scale_to_zero,
     )

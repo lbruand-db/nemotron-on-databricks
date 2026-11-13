@@ -24,6 +24,9 @@ class VLLMConfig:
     # on a 48 GB L40S (GPU_LARGE).
     max_num_seqs: int = 16
     extra_args: tuple[str, ...] = ()
+    # Extra NAME=VALUE environment for the vLLM process, e.g. ("VLLM_TEST_FORCE_FP8_MARLIN=1",) to run the A10G
+    # FP8 kernels (Marlin, W8A16) on an H100 smoke test.
+    env: tuple[str, ...] = ()
 
 
 def vllm_command(model: str, served_model_name: str, port: int, cfg: VLLMConfig | None = None,
@@ -31,6 +34,7 @@ def vllm_command(model: str, served_model_name: str, port: int, cfg: VLLMConfig 
     cfg = cfg or VLLMConfig()
     return [
         "env", "VLLM_USE_FLASHINFER_SAMPLER=0", "HF_HUB_OFFLINE=1",  # no curand.h on AIR; no Hub at serving time
+        *cfg.env,
         python, "-u", "-m", "vllm.entrypoints.openai.api_server",
         "--model", model,
         "--served-model-name", served_model_name,

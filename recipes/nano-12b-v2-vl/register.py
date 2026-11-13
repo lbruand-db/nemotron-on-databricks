@@ -26,6 +26,7 @@ class Params:
     registered_model_name: str
     serving: str = "pyfunc"  # pyfunc | custom_llm
     vllm_extra_args: str = ""  # appended to the serving (and smoke-test) vLLM command, e.g. "--enforce-eager"
+    vllm_env: str = ""  # space-separated NAME=VALUE for the vLLM process, e.g. "VLLM_TEST_FORCE_FP8_MARLIN=1"
 
 
 def main() -> None:
@@ -46,6 +47,7 @@ def main() -> None:
         source_training_run_id=p.source_training_run_id,
         extra_tags={"nemotron.merged_dir": merged},
         vllm_extra_args=tuple(p.vllm_extra_args.split()),
+        vllm_env=tuple(p.vllm_env.split()),
     )
     print("REGISTRATION_RESULT=" + json.dumps(result.__dict__), flush=True)
 

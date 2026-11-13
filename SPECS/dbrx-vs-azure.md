@@ -42,6 +42,7 @@
 
 **Cons and risks**
 - **Custom LLM Serving isn't in West/North Europe**, so Nano VL relies on the classic pyfunc path, with its own request format rather than the OpenAI API (no AI Playground, no vLLM metrics tab).
+- **Nano VL needs the A100 there.** On AWS (2026-11-13), the cookbook serves Nano VL in FP8 on one A10G 24 GB (`GPU_MEDIUM`; field F1 0.847 vs 0.858 in bf16), because larger GPUs had no capacity. Azure serving has no A10G tier, and FP8 weights (14.5 GiB) don't fit a T4 16 GB with room for the KV cache. So in West/North Europe it is `GPU_LARGE` (A100 80 GB), in bf16 or FP8.
 - **No guaranteed GPU capacity** for either AI Runtime or serving scale-up. Use provisioned concurrency and no scale-to-zero for production Nano VL.
 - **Less control over the serving container.** The `env_pack` failures and the unknown driver version are examples. The cookbook pins `torch==2.11.0+cu130` and builds the OCR extension for CUDA 13, which needs driver ≥ 580; Azure serving hosts are unverified. Several pieces are still in Preview.
 - **Network egress.** The same as native Azure: Hugging Face, PyPI and `download.pytorch.org` must be mirrored for a locked-down bank network. Fix: pre-load models and datasets onto Volumes (SPEC OQ-13) and use a private PyPI mirror.

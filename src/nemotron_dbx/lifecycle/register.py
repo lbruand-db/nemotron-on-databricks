@@ -226,6 +226,7 @@ def register_vlm(
     source_training_run_id: str | None = None,
     extra_tags: dict[str, str] | None = None,
     vllm_extra_args: tuple[str, ...] = (),
+    vllm_env: tuple[str, ...] = (),
 ) -> RegistrationResult:
     """Register merged Nano VL weights for Custom LLM Serving (vLLM entrypoint, cookbook pattern).
 
@@ -260,7 +261,8 @@ def register_vlm(
     mlflow.set_registry_uri("databricks-uc")
     os.environ["MLFLOW_USE_DATABRICKS_SDK_MODEL_ARTIFACTS_REPO_FOR_UC"] = "true"
     served_name = registered_model_name.rsplit(".", 1)[-1]
-    cfg = VLLMConfig(extra_args=tuple(vllm_extra_args))  # e.g. ("--enforce-eager",): faster startup
+    # e.g. extra_args=("--enforce-eager",) for faster startup, ("--quantization", "fp8") to fit a 24 GB A10G
+    cfg = VLLMConfig(extra_args=tuple(vllm_extra_args), env=tuple(vllm_env))
     work = scratch_dir("register-vlm")
     local = work / ARTIFACT_NAME
     if local.exists():
@@ -326,6 +328,7 @@ def register_vlm_pyfunc(
     source_training_run_id: str | None = None,
     extra_tags: dict[str, str] | None = None,
     vllm_extra_args: tuple[str, ...] = (),
+    vllm_env: tuple[str, ...] = (),
 ) -> RegistrationResult:
     """Register merged Nano VL weights as a **classic pyfunc** (no `env_pack`): `VLLMChatModel` starts the vLLM
     OpenAI server inside the serving container. This is the fallback while `env_pack` deployments fail on the
@@ -345,13 +348,14 @@ def register_vlm_pyfunc(
         raise RuntimeError("Register from an AI Runtime GPU task: the smoke test starts vLLM.")
     mlflow.set_registry_uri("databricks-uc")
     os.environ["MLFLOW_USE_DATABRICKS_SDK_MODEL_ARTIFACTS_REPO_FOR_UC"] = "true"
-    cfg = VLLMConfig(extra_args=tuple(vllm_extra_args))
+    cfg = VLLMConfig(extra_args=tuple(vllm_extra_args), env=tuple(vllm_env))
     with tempfile.TemporaryDirectory(prefix="nemotron-register-vlm-") as tmp:
         config_path = Path(tmp) / "config.json"
         config_path.write_text(json.dumps({
             "port": PYFUNC_PORT, "startup_timeout_s": 1800,
             "vllm": {"max_model_len": cfg.max_model_len, "gpu_memory_utilization": cfg.gpu_memory_utilization,
-                     "max_num_seqs": cfg.max_num_seqs, "extra_args": list(cfg.extra_args)},
+                     "max_num_seqs": cfg.max_num_seqs, "extra_args": list(cfg.extra_args),
+                     "env": list(cfg.env)},
         }, indent=2))
         artifacts = {"model_dir": str(merged_dir), "config": str(config_path)}
 

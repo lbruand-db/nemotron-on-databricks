@@ -1,0 +1,45 @@
+# Optional: re-evaluate the merged checkpoint of a stage-1 run with other vLLM serving flags. The defaults test
+# FP8 weights (Marlin W8A16, the kernels an A10G uses) within an A10G-sized memory budget. Run from the repo root:
+#   databricks air run -f recipes/nano-12b-v2-vl/eval.yaml --override parameters.source_training_run_id=<MLFLOW_RUN_ID>
+experiment_name: nemotron-nano-12b-v2-vl
+
+mlflow_run_name: nano-vl-eval-fp8
+
+environment:
+  version: databricks_ai_v6
+
+compute:
+  accelerator_type: GPU_1xH100
+  num_accelerators: 1
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../..
+    include_paths:
+      - src
+      - recipes/nano-12b-v2-vl
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+  VLLM_USE_FLASHINFER_SAMPLER: "0"
+
+parameters:
+  source_training_run_id: ""
+  tag: fp8
+  vllm_extra_args: "--quantization fp8"
+  vllm_env: "VLLM_TEST_FORCE_FP8_MARLIN=1"
+  # vLLM's memory cap in GiB (0.90 x 22.4 GiB of an A10G); 0 = this GPU's default share.
+  gpu_budget_gib: 20.2
+  test_items: 0
+  eval_val: false
+
+max_retries: 0
+timeout_minutes: 60
+
+command: |
+  cd "$CODE_SOURCE_PATH"
+  export PYTHONPATH="$CODE_SOURCE_PATH/src:${PYTHONPATH:-}"
+  pip install -q zss==1.2.0  # tree edit distance for the TED metric (the training recipe installs it with its deps)
+  python -u recipes/nano-12b-v2-vl/eval.py

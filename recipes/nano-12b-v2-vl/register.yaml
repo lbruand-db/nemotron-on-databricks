@@ -34,6 +34,8 @@ parameters:
   serving: pyfunc
   # Extra vLLM flags for the serving entrypoint (also used by the smoke test), e.g. --enforce-eager.
   vllm_extra_args: ""
+  # Extra NAME=VALUE environment for vLLM (space-separated), e.g. VLLM_TEST_FORCE_FP8_MARLIN=1.
+  vllm_env: ""
 
 max_retries: 0
 timeout_minutes: 90
