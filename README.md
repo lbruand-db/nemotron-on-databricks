@@ -35,10 +35,10 @@ The handoff between stages is the Volume path plus the training run's MLflow run
 | Model | Task | Architecture | Fine-tuning | Data | Serving | Status |
 |---|---|---|---|---|---|---|
 | [nemotron-page-elements-v3](https://huggingface.co/nvidia/nemotron-page-elements-v3) | Page layout detection (table, chart, title, infographic, text, header/footer) | YOLOX-L, 54 M | Full fine-tune, SimOTA loss | DocLayNet v1.2 | GPU pyfunc | ✅ [done](recipes/page-elements-v3/): test mAP 0.21 → 0.64 |
-| [nemotron-table-structure-v1](https://huggingface.co/nvidia/nemotron-table-structure-v1) | Table cells, rows and columns | YOLOX-L, 54 M | Full fine-tune | PubTables-1M | GPU pyfunc | planned |
-| [nemotron-graphic-elements-v1](https://huggingface.co/nvidia/nemotron-graphic-elements-v1) | Chart titles, axes, legends and labels | YOLOX-L, 54 M | Full fine-tune | Synthetic charts | GPU pyfunc | planned |
+| [nemotron-table-structure-v1](https://huggingface.co/nvidia/nemotron-table-structure-v1) | Table cells, rows and columns | YOLOX-L, 54 M | Full fine-tune | PubTables-1M | GPU pyfunc | ✅ [done](recipes/table-structure-v1/): test mAP 0.49 → 0.86 |
+| [nemotron-graphic-elements-v1](https://huggingface.co/nvidia/nemotron-graphic-elements-v1) | Chart titles, axes, legends and labels | YOLOX-L, 54 M | Full fine-tune | Synthetic charts | GPU pyfunc | ✅ [trained](recipes/graphic-elements-v1/): synthetic test mAP 0.40 → 0.84 (endpoint deploying) |
 | [nemotron-ocr-v1](https://huggingface.co/nvidia/nemotron-ocr-v1) | OCR: text detection, recognition and reading order | RegNetY detector + Transformer recognizer + relational model, 52 M | Recognizer only | CORD-v2 | GPU pyfunc + C++/CUDA extension | ✅ [done](recipes/ocr-v1/): CER 4.95 % → 1.63 % |
-| [nemotron-nano-12b-v2-vl](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16) | Document visual Q&A and extraction | RADIO + hybrid Mamba-Transformer, 12.6 B | LoRA (HF + PEFT) | CORD-v2 → JSON | Custom LLM Serving (vLLM) | planned |
+| [nemotron-nano-12b-v2-vl](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16) | Document visual Q&A and extraction | RADIO + hybrid Mamba-Transformer, 12.6 B | LoRA (HF + PEFT) | CORD-v2 → JSON | vLLM in a GPU pyfunc (Custom LLM Serving blocked, SPEC OQ-5) | 🟡 [trained](recipes/nano-12b-v2-vl/): field F1 0.39 → 0.86; endpoint pending GPU capacity |
 
 All five models are under the [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/), which allows commercial use. The datasets are CC-BY-4.0, CDLA-Permissive or synthetic.
 
@@ -46,14 +46,17 @@ All five models are under the [NVIDIA Open Model License](https://www.nvidia.com
 
 ```text
 SPECS/SPEC.md         design spec: decisions, per-model plans, open questions, M0 findings (§11)
+SPECS/dbrx-vs-azure.md  Azure-native vs Azure Databricks (West/North Europe): regions, complexity, cost
 src/nemotron_dbx/     shared package, shipped with every workload
   common/             parameters, paths, pinned HF sources, MLflow helpers, rank helpers
   yolox_train/        YOLOX SimOTA loss (ported from Megvii, Apache-2.0), data pipeline, trainer
-  detection/          NVIDIA detector loading, DocLayNet prep, COCO mAP, serving pyfunc
+  detection/          NVIDIA detector loading, shared fine-tune/eval runner, DocLayNet / PubTables-1M prep,
+                      synthetic chart generator, COCO mAP, serving pyfunc
   ocr/                OCR recognizer fine-tuning on GT quads, CORD-v2, CER/BoW metrics, serving pyfunc
+  vlm/                Nano VL: training deps + remote-code patches, LoRA trainer, shard merge, vLLM eval,
+                      serving (classic pyfunc running vLLM, or the Custom LLM Serving placeholder)
   lifecycle/          register (smoke test + UC), deploy (idempotent endpoint), query
 recipes/<model>/      thin recipes: workload.yaml, register.yaml, train.py, register.py, README.md
-                      (page-elements-v3 and ocr-v1 are done)
 recipes/spikes/       M0 de-risking workloads (vLLM serving, LoRA, OCR build, ...)
 tests/                CPU unit tests (pytest)
 tools/air_wait.sh     waits for an AIR run, then prints its logs
@@ -113,7 +116,9 @@ Since M0, M1 has shown that page-elements-v3 trains in 22 min on 1× A10 and ser
 
 M3 then showed that the OCR recognizer fine-tunes in under 9 min, and that its compiled C++/CUDA extension serves on a T4 endpoint, shipped as a wheel with exact torch pins (SPEC OQ-9).
 
-Not verified yet: Nano VL on Custom LLM Serving (SPEC OQ-5).
+M4 fine-tuned Nano 12B VL with LoRA (CORD field F1 0.39 → 0.86 in 31 min on 1× H100), after fixing a silent transformers 5 image-preprocessing bug (SPEC §11.3 patch 11). Serving is not verified yet: Custom LLM Serving deployments fail before the entrypoint starts on the test workspace (also for a cookbook-identical tiny model, SPEC OQ-5), and the classic-pyfunc fallback built fine but never got a `GPU_LARGE` GPU.
+
+M2 added table-structure-v1 (PubTables-1M, test mAP 0.49 → 0.86, served on T4) and graphic-elements-v1 (synthetic charts, 0.40 → 0.84). A real-chart check caught a regression that synthetic mAP hid (captions mislabelled as axis text), fixed by adding captions to the generator.
 
 ## Non-goals
 

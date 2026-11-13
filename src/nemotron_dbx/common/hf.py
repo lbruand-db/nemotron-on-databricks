@@ -52,3 +52,6 @@ NANO_VL_V2_REMOTE_CODE = {
     "nvidia/C-RADIOv2-H": "0d8f4c18c877166eda07ddae1386bcad256b7a6a",
     "nvidia/NVIDIA-Nemotron-Nano-12B-v2-Base": "78dc93a79e2533922ac8ad2c16f79b7fb747970d",
 }
+TABLE_STRUCTURE_V1 = HFSource("nvidia/nemotron-table-structure-v1", "9350162faa1110320af62699105780b0c87b73ad")
+GRAPHIC_ELEMENTS_V1 = HFSource("nvidia/nemotron-graphic-elements-v1", "4a76546bb1bb4cbab3401361c91cf01706321805")
+PUBTABLES_1M = HFSource("bsmock/pubtables-1m", "35b1c097807e0b07ec5313879b85956b7b3890db", repo_type="dataset")

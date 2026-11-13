@@ -62,7 +62,7 @@ class DetectorModel(PythonModel):
     def load_context(self, context) -> None:
         import torch
 
-        from .hf_detector import SPECS, load_yolox, wrap
+        from .hf_detector import SPECS, class_thresholds, load_yolox, wrap
 
         with open(context.artifacts["config"], encoding="utf-8") as fh:
             self.config = json.load(fh)
@@ -71,7 +71,7 @@ class DetectorModel(PythonModel):
         model, exp = load_yolox(spec, context.artifacts["hf_code"], context.artifacts["weights"], device)
         self.wrapper = wrap(spec, context.artifacts["hf_code"], model, exp)
         self.labels = list(exp.labels)
-        self.thresholds = dict(self.config.get("thresholds_per_class") or exp.thresholds_per_class)
+        self.thresholds = dict(self.config.get("thresholds_per_class") or class_thresholds(exp))
         self.batch_size = int(self.config.get("batch_size", 8))
 
     def predict(self, context, model_input, params: dict[str, Any] | None = None):

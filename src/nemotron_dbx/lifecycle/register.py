@@ -37,7 +37,7 @@ def package_dir() -> Path:
 
 
 def build_detector_artifacts(spec_name: str, weights: str | Path, work_dir: Path, batch_size: int = 8):
-    from ..detection.hf_detector import SPECS, load_exp, snapshot
+    from ..detection.hf_detector import SPECS, class_thresholds, load_exp, snapshot
 
     spec = SPECS[spec_name]
     code_dir = snapshot(spec, work_dir / "hf_code", with_weights=False)
@@ -47,7 +47,7 @@ def build_detector_artifacts(spec_name: str, weights: str | Path, work_dir: Path
         "spec": spec_name,
         "source": f"{spec.source.repo_id}@{spec.source.revision}",
         "labels": list(exp.labels),
-        "thresholds_per_class": dict(exp.thresholds_per_class),
+        "thresholds_per_class": class_thresholds(exp),
         "batch_size": batch_size,
     }
     (work_dir / "config.json").write_text(json.dumps(config, indent=2))

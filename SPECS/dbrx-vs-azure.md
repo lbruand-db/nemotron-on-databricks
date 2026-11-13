@@ -47,9 +47,85 @@
 - **Network egress.** The same as native Azure: Hugging Face, PyPI and `download.pytorch.org` must be mirrored for a locked-down bank network. Fix: pre-load models and datasets onto Volumes (SPEC OQ-13) and use a private PyPI mirror.
 - **The OCR extension doesn't support A100 yet.** It's built for sm_75/86/89/90, not the A100 (sm_80). Fine on T4, but add `8.0` before serving OCR on `GPU_LARGE`.
 
+## Complexity (code and operations)
+
+### What the cookbook is made of today (measured in this repo)
+
+| Part | Size | Platform-specific? |
+|---|---|---|
+| ML core: YOLOX loss/trainer, detection data and metrics, OCR recognizer training, VLM LoRA/merge/eval/compat patches (`yolox_train`, `detection`, `ocr`, `vlm`) | ~2,200 lines of Python | **No.** Plain PyTorch, Hugging Face, PEFT, vLLM, MLflow. Ports to either platform as is. |
+| Recipe entry points (`recipes/*/train.py`) | ~350 lines | Lightly: they read AIR parameters and write to a Volume |
+| Databricks layer: register/deploy/query (`lifecycle`), parameter, path and MLflow-run helpers, `recipes/*/register.py` | ~750 lines | **Yes.** Unity Catalog registration, `MLFLOW_RUN_ID`, Model Serving SDK |
+| AIR workload definitions (`workload.yaml`, `register.yaml`) | ~200 lines of YAML | Yes |
+| Dockerfiles, infrastructure-as-code, cluster/node-pool config | **none** | Not needed: stock `databricks_ai_v6`, serverless GPUs, managed serving |
+| Tests (CPU) | ~480 lines | No |
+
+The hard parts (porting the YOLOX loss, OCR per-position CE, the 13 Nano VL compatibility patches, the shard merge, the vLLM eval) are **the same work on either platform**. The platforms differ in everything around that core.
+
+### Azure Databricks
+
+- **What you write:** the ML code, one YAML per stage, and a ~30-line register script per recipe. Unity Catalog provides the model registry, lineage (training run → model version → endpoint) and permissions. Serving is one SDK call (`nemotron_dbx.lifecycle.deploy`).
+- **What you operate:** almost nothing. There are no clusters, images, drivers or node pools to maintain. CUDA extensions are compiled once inside the stock environment and cached on a Volume (`common/wheels.py`).
+- **Where the complexity actually showed up (AWS test workspace):** opaque platform failures you can't debug from outside (`env_pack` deployments, SPEC OQ-5/OQ-17). GPU capacity waits that were invisible from the CLI (OQ-16). CLI quirks (OQ-15, OQ-18). Little control over the serving image (driver version, base libraries).
+
+### Azure-native (Azure ML / AKS)
+
+- **What you'd keep:** the ML core and the MLflow logging (Azure ML supports MLflow tracking and its model registry).
+- **What you'd rewrite:** the ~750-line Databricks layer and the YAML, as Azure ML command jobs, Azure ML registry calls and online-endpoint deployments. The amount of code is comparable.
+- **What you'd add, which Databricks doesn't need:**
+  1. **Container images.** A training image with CUDA 13, torch, the OCR extension, `causal-conv1d` and `mamba-ssm`; one or more serving images (vLLM, the OCR runtime). Plus an Azure Container Registry, and rebuilds on every dependency bump.
+  2. **Compute.** An Azure ML workspace, a compute cluster per GPU type, per-region quota requests for A10/A100/H100. Or, on AKS, GPU node pools with the NVIDIA GPU operator and driver management.
+  3. **Serving plumbing.** Scoring scripts or a vLLM container with liveness/readiness probes, autoscale rules (Azure Monitor), and blue/green traffic shifts.
+  4. **Networking and identity.** VNet, private endpoints for storage, registry and endpoints, managed identities and registry pull permissions.
+  5. **Infrastructure-as-code** (Bicep/Terraform) for all of the above, plus CI to build and scan images.
+  6. **Governance glue.** Lineage from documents to model to endpoint isn't automatic; it means Purview or custom tags.
+- **The upside of that work:** full control. You pick the driver/CUDA version, inspect container logs and reserve capacity, so the failure modes above become debuggable.
+- **Rough size (my estimate, not measured):** a few engineer-weeks to reach parity with this cookbook, plus ongoing image and infrastructure maintenance. On Databricks, that part was zero.
+
+## Cost
+
+List prices in USD, pay-as-you-go, **West Europe** unless noted, checked 2026-11-12. These are estimates; confirm with the Azure pricing calculator and the account's negotiated rates.
+
+### Unit prices
+
+| GPU | Azure Databricks | Azure-native VM (compute only) |
+|---|---|---|
+| **Training** | AI Runtime: **A10 $4.90 / GPU-h**, **H100 $7.00 / GPU-h** (Microsoft's published US East reference; West Europe not confirmed). The VM is included. | A10: `Standard_NV36ads_A10_v5` **$4.16/h**. H100: `Standard_NC40ads_H100_v5` (H100 NVL 94 GB) **$9.08/h**. Azure ML adds no surcharge. |
+| **Serving T4** | `GPU_SMALL`: 10.48 DBU/h × $0.084/DBU = **$0.88/h** per instance | `Standard_NC4as_T4_v3` **$0.66/h** |
+| **Serving A100 80 GB** | `GPU_LARGE`: 78.60 DBU/h × $0.084/DBU = **$6.60/h** per instance | `Standard_NC24ads_A100_v4` **$4.78/h** |
+
+On top of that: Databricks needs a Premium workspace. Azure-native adds container registry, storage, Log Analytics, networking and the engineering time above. Both can be discounted (Databricks commit; Azure reservations/savings plans), and Azure Databricks spend typically counts toward a Microsoft commitment.
+
+### Training: a few dollars per run on either platform
+
+Billed times are the measured run durations from this cookbook.
+
+| Run | Measured duration | Azure Databricks | Azure-native |
+|---|---|---|---|
+| page-elements-v3 fine-tune | 22 min, 1×A10 | ~$1.80 | ~$1.50, plus cluster spin-up |
+| ocr-v1 fine-tune | 8.6 min, 1×A10 | ~$0.70 | ~$0.60, plus spin-up |
+| nano-12b-v2-vl LoRA + evals + merge | 31 min, 1×H100 | ~$3.60 | ~$4.70, plus spin-up |
+| nano-12b-v2-vl registration (vLLM smoke test + packaging) | 15–48 min, 1×H100 | ~$1.75–5.60 | similar |
+
+The whole M0–M4 development effort (about 25 GPU jobs) cost **tens of dollars of GPU time** either way. **Training cost doesn't decide this; serving does.**
+
+### Serving: the cost that matters
+
+Monthly cost per endpoint with one instance. "Business hours" means ~220 h/month (10 h × 22 days), which only Databricks scale-to-zero achieves. Azure ML managed online endpoints can't scale to zero, and Azure Container Apps' serverless T4 exists in West Europe only (no A100, nothing in North Europe).
+
+| Endpoint | Databricks, 24/7 | Databricks, business hours | Azure-native VM, 24/7 |
+|---|---|---|---|
+| T4 detector or OCR (×4 in the full cookbook) | ~$640 | ~$195 | ~$480 |
+| A100 Nano VL | ~$4,820 | ~$1,450 | ~$3,490 |
+| **Full cookbook (4 × T4 + 1 × A100)** | **~$7,390** | **~$2,230** | **~$5,410** |
+
+- **Break-even:** per GPU-hour, Azure-native list compute is **~25–28 % cheaper** (T4 $0.66 vs $0.88; A100 $4.78 vs $6.60). Databricks bills only active time and includes the managed platform. So **an endpoint up less than ~72–75 % of the time is cheaper on Databricks**; one that must be up 24/7 is cheaper as a raw VM, before engineering and operations costs.
+- **Cold starts limit scale-to-zero for Nano VL.** Loading vLLM and the 25 GB model takes minutes (the pyfunc smoke test took 217 s including vLLM start on H100). Scale-to-zero suits dev, demos and batch, not an interactive production SLA. So production Nano VL is likely always-on, where Azure-native list compute is cheaper.
+- **Batch is the cheapest pattern on both.** For a document backlog, running extraction as a batch job (AI Runtime, or an Azure ML cluster that scales to zero) instead of keeping endpoints up costs only the job's GPU time. At the measured ~4.7 receipts/s for Nano VL on one H100, 100k pages is ~6 GPU-hours: ~$40 on AI Runtime.
+
 ## Recommendation
 
-Fine-tune and run batch extraction on **Azure Databricks**. Serve the detectors and OCR on Databricks T4 endpoints, and Nano VL on the A100 pyfunc. Keep **AKS with reserved A100/H100** as the option if Nano VL needs hard latency or capacity SLAs that serverless can't promise. The merged weights are plain Hugging Face/vLLM checkpoints, so moving them later is cheap.
+Fine-tune and run batch extraction on **Azure Databricks**. Serve the detectors and OCR on Databricks T4 endpoints, and Nano VL on the A100 pyfunc. Keep **AKS with reserved A100/H100** as the option if Nano VL needs hard latency or capacity SLAs that serverless can't promise. Cost points the same way: an always-on A100 endpoint is ~$1.3k/month cheaper as a raw VM at list price, which has to be weighed against the engineering and operations work in the Complexity section. The merged weights are plain Hugging Face/vLLM checkpoints, so moving them later is cheap. For bulk document processing, prefer batch jobs over always-on endpoints on either platform.
 
 **Before committing, check:**
 1. `az vm list-skus --all` and GPU quotas on the bank's subscription in `westeurope` and `northeurope`.
@@ -66,4 +142,9 @@ Fine-tune and run batch extraction on **Azure Databricks**. Serve the detectors 
 - Azure NC A100 v4 series (capacity note): https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/gpu-accelerated/nca100v4-series
 - Azure Container Apps serverless GPUs (regions): https://learn.microsoft.com/en-us/azure/container-apps/gpu-serverless-overview
 - Azure AI Foundry managed compute / NVIDIA NIM: https://learn.microsoft.com/en-us/azure/foundry-classic/how-to/deploy-models-managed-pay-go, https://learn.microsoft.com/en-us/azure/foundry/how-to/deploy-models-managed
+- Azure Databricks AI Runtime pricing guide (A10/H100 per GPU-hour, US East reference): https://learn.microsoft.com/fil-ph/azure/Databricks/machine-learning/ai-runtime/guides/
+- Azure Databricks Model Serving DBU rates (GPU_SMALL 10.48, GPU_LARGE 78.60 DBU/h): https://learn.microsoft.com/azure/databricks/resources/pricing
+- West Europe Serverless Real-Time Inference DBU price ($0.084), from the Azure Retail Prices API via https://www.dbuwatch.com/regions/azure/westeurope/
+- West Europe Linux VM pay-as-you-go prices, from https://instances.usage.ai/azure/vm/region/westeurope (verify with https://azure.microsoft.com/en-us/pricing/details/virtual-machines/linux/)
+- Azure ML online endpoints (no surcharge, no scale-to-zero): https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-online
 - NVIDIA NeMo Retriever extraction 26.08.1 release notes: https://docs.nvidia.com/nemo/retriever/26.8.1/extraction/releasenotes/

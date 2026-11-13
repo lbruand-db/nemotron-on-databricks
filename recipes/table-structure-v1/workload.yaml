@@ -1,0 +1,55 @@
+# Stage 1: fine-tune nvidia/nemotron-table-structure-v1 on PubTables-1M table crops (cell / row / column).
+# Run from the repo root:  databricks air run -f recipes/table-structure-v1/workload.yaml
+experiment_name: nemotron-table-structure-v1
+
+mlflow_run_name: table-structure-v1-pubtables-ft
+
+environment:
+  version: databricks_ai_v6
+
+compute:
+  # A10 by default (H100 capacity can be unavailable for long periods, SPEC OQ-16).
+  # On H100: --override compute.accelerator_type=GPU_1xH100 --override parameters.batch_size=8
+  #          --override parameters.grad_accum=1
+  accelerator_type: GPU_1xA10
+  num_accelerators: 1
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../..
+    include_paths:
+      - src
+      - recipes/table-structure-v1
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+  PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+
+parameters:
+  # Durable outputs + dataset cache. Must be an existing writable Volume directory.
+  output_root: /Volumes/am_rag_fevm_catalog/nemotron/artifacts/table-structure-v1
+  train_tables: 3000
+  val_tables: 300
+  test_tables: 300
+  epochs: 8
+  batch_size: 4
+  grad_accum: 2  # effective batch 8
+  eval_batch_size: 8
+  lr: 0.0001
+  backbone_lr_mult: 0.1
+  warmup_steps: 100
+  max_train_minutes: 40
+  max_labels: 1000  # cells + rows + columns per table (p95 ~230, max ~400 in a 400-table sample)
+  max_dets: 1000
+  seed: 0
+
+max_retries: 0
+timeout_minutes: 120
+
+command: |
+  cd "$CODE_SOURCE_PATH"
+  export PYTHONPATH="$CODE_SOURCE_PATH/src:${PYTHONPATH:-}"
+  pip install -q --no-deps "pycocotools==2.0.11"
+  python -u recipes/table-structure-v1/train.py

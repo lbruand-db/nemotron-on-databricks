@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ..common.hf import PAGE_ELEMENTS_V3, HFSource
+from ..common.hf import GRAPHIC_ELEMENTS_V1, PAGE_ELEMENTS_V3, TABLE_STRUCTURE_V1, HFSource
 
 
 @dataclass(frozen=True)
@@ -39,7 +39,32 @@ PAGE_ELEMENTS = DetectorSpec(
     weights_file="nemotron_page_elements_v3/weights.pth",
 )
 
-SPECS = {s.name: s for s in (PAGE_ELEMENTS,)}
+TABLE_STRUCTURE = DetectorSpec(
+    name="table_structure_v1",
+    source=TABLE_STRUCTURE_V1,
+    package="nemotron_table_structure_v1",
+    exp_module="table_structure_v1",
+    weights_file="nemotron_table_structure_v1/weights.pth",
+)
+
+GRAPHIC_ELEMENTS = DetectorSpec(
+    name="graphic_elements_v1",
+    source=GRAPHIC_ELEMENTS_V1,
+    package="nemotron_graphic_elements_v1",
+    exp_module="graphic_element_v1",
+    weights_file="nemotron_graphic_elements_v1/weights.pth",
+)
+
+SPECS = {s.name: s for s in (PAGE_ELEMENTS, TABLE_STRUCTURE, GRAPHIC_ELEMENTS)}
+
+
+def class_thresholds(exp) -> dict[str, float]:
+    """Per-class score thresholds: page-elements defines `thresholds_per_class`; table-structure and
+    graphic-elements use one `threshold` for every class (their `postprocess_preds_*` helpers)."""
+    per_class = getattr(exp, "thresholds_per_class", None)
+    if per_class:
+        return dict(per_class)
+    return {name: float(exp.threshold) for name in exp.labels}
 
 
 def snapshot(spec: DetectorSpec, dest: str | Path, with_weights: bool = True) -> Path:
