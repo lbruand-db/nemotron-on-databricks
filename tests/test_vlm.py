@@ -9,7 +9,13 @@ from nemotron_dbx.vlm import compat
 from nemotron_dbx.vlm.data import INSTRUCTION, SYSTEM, VLSample, openai_messages, target_text
 from nemotron_dbx.vlm.lora import lr_factor, rank_slice
 from nemotron_dbx.vlm.metrics import extraction_metrics, field_f1, normalize, parse_json_output, ted_accuracy
-from nemotron_dbx.vlm.vllm_server import VLLMConfig, vllm_command, vllm_config_from_json
+from nemotron_dbx.vlm.vllm_server import (
+    A10G_BUDGET_GIB,
+    VLLMConfig,
+    vllm_command,
+    vllm_config_from_json,
+    with_gpu_budget,
+)
 
 GT = {
     "menu": [{"nm": "ICED TEA", "cnt": "1", "price": "20,000"}, {"nm": "NASI", "cnt": "2", "price": "50,000"}],
@@ -105,6 +111,16 @@ def test_vllm_config_json_round_trip():
 
     cfg = VLLMConfig(max_num_seqs=8, extra_args=("--quantization", "fp8"), env=("A=1",))
     assert vllm_config_from_json(json.loads(json.dumps(dataclasses.asdict(cfg)))) == cfg
+
+
+
+def test_gpu_budget_caps_utilization_only():
+    cfg = VLLMConfig(extra_args=("--quantization", "fp8"))
+    capped = with_gpu_budget(cfg, A10G_BUDGET_GIB, total_gib=79.2)
+    assert capped.gpu_memory_utilization == pytest.approx(0.2551, abs=1e-4)
+    assert capped.extra_args == cfg.extra_args
+    assert with_gpu_budget(cfg, 0) is cfg
+    assert with_gpu_budget(cfg, 40, total_gib=22.4).gpu_memory_utilization == cfg.gpu_memory_utilization  # never above
 
 
 # --- training schedule ---

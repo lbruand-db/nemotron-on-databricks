@@ -27,6 +27,7 @@ class Params:
     serving: str = "pyfunc"  # pyfunc | custom_llm
     vllm_extra_args: str = ""  # appended to the serving (and smoke-test) vLLM command, e.g. "--enforce-eager"
     vllm_env: str = ""  # space-separated NAME=VALUE for the vLLM process, e.g. "VLLM_TEST_FORCE_FP8_MARLIN=1"
+    smoke_gpu_budget_gib: float = 0.0  # cap the smoke test at the serving GPU's memory, e.g. 20.2 for an A10G
 
 
 def main() -> None:
@@ -48,6 +49,7 @@ def main() -> None:
         extra_tags={"nemotron.merged_dir": merged},
         vllm_extra_args=tuple(p.vllm_extra_args.split()),
         vllm_env=tuple(p.vllm_env.split()),
+        smoke_gpu_budget_gib=p.smoke_gpu_budget_gib,
     )
     print("REGISTRATION_RESULT=" + json.dumps(result.__dict__), flush=True)
 

@@ -51,7 +51,8 @@ databricks air run -f recipes/nano-12b-v2-vl/eval.yaml --override parameters.sou
 
 # 3. Register a classic pyfunc that runs vLLM in FP8 (smoke test: the pyfunc exactly as serving runs it)
 databricks air run -f recipes/nano-12b-v2-vl/register.yaml --override parameters.source_training_run_id=<MLFLOW_RUN_ID> \
-  --override "parameters.vllm_extra_args=--quantization fp8" --override parameters.vllm_env=VLLM_TEST_FORCE_FP8_MARLIN=1
+  --override "parameters.vllm_extra_args=--quantization fp8" --override parameters.vllm_env=VLLM_TEST_FORCE_FP8_MARLIN=1 \
+  --override parameters.smoke_gpu_budget_gib=20.2
 tools/air_wait.sh <JOB_RUN_ID>          # REGISTRATION_RESULT={... "model_version": ...}
 
 # 4. Deploy + query
@@ -61,7 +62,7 @@ tools/endpoint_wait.sh nemotron-nano-vl-ft <PROFILE>
 python -m nemotron_dbx.lifecycle.query --endpoint-name nemotron-nano-vl-ft receipt.png --profile <PROFILE>
 ```
 
-`VLLM_TEST_FORCE_FP8_MARLIN=1` makes the H100 smoke test use the same FP8 kernels (Marlin, W8A16) as the A10G; on the A10G they are the default anyway.
+`VLLM_TEST_FORCE_FP8_MARLIN=1` makes the H100 smoke test use the same FP8 kernels (Marlin, W8A16) as the A10G; on the A10G they are the default anyway. `smoke_gpu_budget_gib=20.2` caps the smoke test at the A10G's memory, so a config that doesn't fit fails at registration rather than after the deployment. The registered serving config keeps `gpu_memory_utilization` 0.90.
 
 The pyfunc takes one record per receipt, `{"image": "<base64>", "id": "...", "instruction": "<optional>"}`, and returns `{id, text, fields, json_valid, usage, latency_s}`, where `fields` is the parsed JSON.
 

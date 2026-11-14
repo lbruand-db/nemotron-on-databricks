@@ -36,6 +36,9 @@ parameters:
   vllm_extra_args: ""
   # Extra NAME=VALUE environment for vLLM (space-separated), e.g. VLLM_TEST_FORCE_FP8_MARLIN=1.
   vllm_env: ""
+  # Cap the smoke test's vLLM at the serving GPU's memory (GiB), so a config that won't fit fails here and not
+  # after an hour-long deployment. 20.2 = 0.90 of an A10G (GPU_MEDIUM); 0 = no cap (serving GPU >= this one).
+  smoke_gpu_budget_gib: 0
 
 max_retries: 0
 timeout_minutes: 90

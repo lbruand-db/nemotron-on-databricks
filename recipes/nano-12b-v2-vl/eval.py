@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import shutil
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import mlflow
@@ -37,11 +37,9 @@ class Params:
 
 
 def main() -> None:
-    import torch
-
     from nemotron_dbx.vlm.data import load_cord
     from nemotron_dbx.vlm.evaluate import evaluate_with_vllm
-    from nemotron_dbx.vlm.vllm_server import VLLMConfig
+    from nemotron_dbx.vlm.vllm_server import VLLMConfig, gpu_total_gib, with_gpu_budget
 
     p = build_config(Params, load_parameters())
     print(f"[setup] params: {asdict(p)}", flush=True)
@@ -60,10 +58,9 @@ def main() -> None:
     shutil.copytree(merged, local)  # vLLM loads ~3x faster from local disk than from the Volume
     print(f"[setup] copied {merged} -> {local} in {time.monotonic() - t0:.0f}s", flush=True)
 
+    total_gib = gpu_total_gib()  # nvidia-smi: no CUDA context in this process while vLLM runs
     cfg = VLLMConfig(extra_args=tuple(p.vllm_extra_args.split()), env=tuple(p.vllm_env.split()))
-    total_gib = torch.cuda.get_device_properties(0).total_memory / 2**30
-    if p.gpu_budget_gib:
-        cfg = replace(cfg, gpu_memory_utilization=round(min(0.9, p.gpu_budget_gib / total_gib), 4))
+    cfg = with_gpu_budget(cfg, p.gpu_budget_gib, total_gib)
     print(f"[setup] GPU {total_gib:.1f} GiB; vLLM config {cfg}", flush=True)
 
     cache = scratch_dir("cord-v2")

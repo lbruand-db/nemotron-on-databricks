@@ -13,7 +13,7 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 _ENV_ITEM = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=\S*")
@@ -37,6 +37,27 @@ class VLLMConfig:
         bad = [item for item in self.env if not _ENV_ITEM.fullmatch(item)]
         if bad:
             raise ValueError(f"VLLMConfig.env items must be NAME=VALUE, got {bad}")
+
+
+# vLLM's memory on a 24 GB A10G (GPU_MEDIUM): 0.90 of the 22.4 GiB that the driver reports.
+A10G_BUDGET_GIB = 20.2
+
+
+def gpu_total_gib(index: int = 0) -> float:
+    """Total memory of one GPU, from nvidia-smi. Unlike torch.cuda, this opens no CUDA context in this process, so
+    the vLLM subprocess gets the whole GPU."""
+    out = subprocess.run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits", "-i", str(index)],
+                         capture_output=True, text=True, check=True).stdout
+    return float(out.strip().splitlines()[0]) / 1024  # MiB -> GiB
+
+
+def with_gpu_budget(cfg: VLLMConfig, budget_gib: float, total_gib: float | None = None) -> VLLMConfig:
+    """Cap vLLM at `budget_gib` of GPU memory, e.g. to check on an H100 that a config fits a smaller serving GPU
+    (`A10G_BUDGET_GIB`). 0 leaves `cfg` unchanged."""
+    if not budget_gib:
+        return cfg
+    total = total_gib or gpu_total_gib()
+    return replace(cfg, gpu_memory_utilization=round(min(cfg.gpu_memory_utilization, budget_gib / total), 4))
 
 
 def vllm_config_from_json(d: dict) -> VLLMConfig:

@@ -227,6 +227,7 @@ def register_vlm(
     extra_tags: dict[str, str] | None = None,
     vllm_extra_args: tuple[str, ...] = (),
     vllm_env: tuple[str, ...] = (),
+    smoke_gpu_budget_gib: float = 0.0,
 ) -> RegistrationResult:
     """Register merged Nano VL weights for Custom LLM Serving (vLLM entrypoint, cookbook pattern).
 
@@ -244,7 +245,7 @@ def register_vlm(
     from ..vlm.data import INSTRUCTION, openai_messages
     from ..vlm.metrics import flatten, normalize, parse_json_output
     from ..vlm.serving import ARTIFACT_NAME, EntrypointModel
-    from ..vlm.vllm_server import VLLMConfig, VLLMServer, vllm_command
+    from ..vlm.vllm_server import VLLMConfig, VLLMServer, vllm_command, with_gpu_budget
 
     if not os.environ.get("DATABRICKS_ACCELERATOR"):
         raise RuntimeError("Custom LLM models must be logged from an AI Runtime GPU task.")
@@ -271,7 +272,9 @@ def register_vlm(
     shutil.copytree(merged_dir, local)
     print(f"[register] copied {merged_dir} -> {local} in {time.monotonic() - t0:.0f}s", flush=True)
 
-    with VLLMServer(ARTIFACT_NAME, served_model_name=served_name, port=3080, cfg=cfg, cwd=str(work),
+    # Same command as serving, but optionally capped at the serving GPU's memory (e.g. an A10G's on this H100).
+    smoke_cfg = with_gpu_budget(cfg, smoke_gpu_budget_gib)
+    with VLLMServer(ARTIFACT_NAME, served_model_name=served_name, port=3080, cfg=smoke_cfg, cwd=str(work),
                     log_path=work / "vllm.log") as server:
         out = server.chat(openai_messages(smoke_sample.data_url()), max_tokens=1536)
     answer = out["choices"][0]["message"]["content"] or ""
@@ -329,6 +332,7 @@ def register_vlm_pyfunc(
     extra_tags: dict[str, str] | None = None,
     vllm_extra_args: tuple[str, ...] = (),
     vllm_env: tuple[str, ...] = (),
+    smoke_gpu_budget_gib: float = 0.0,
 ) -> RegistrationResult:
     """Register merged Nano VL weights as a **classic pyfunc** (no `env_pack`): `VLLMChatModel` starts the vLLM
     OpenAI server inside the serving container. This is the fallback while `env_pack` deployments fail on the
@@ -342,7 +346,7 @@ def register_vlm_pyfunc(
     from mlflow.models import infer_signature
 
     from ..vlm.serving import PYFUNC_PORT, SERVING_PARAMS, VLLMChatModel
-    from ..vlm.vllm_server import VLLMConfig
+    from ..vlm.vllm_server import VLLMConfig, with_gpu_budget
 
     if not os.environ.get("DATABRICKS_ACCELERATOR"):
         raise RuntimeError("Register from an AI Runtime GPU task: the smoke test starts vLLM.")
@@ -350,17 +354,23 @@ def register_vlm_pyfunc(
     os.environ["MLFLOW_USE_DATABRICKS_SDK_MODEL_ARTIFACTS_REPO_FOR_UC"] = "true"
     cfg = VLLMConfig(extra_args=tuple(vllm_extra_args), env=tuple(vllm_env))
     with tempfile.TemporaryDirectory(prefix="nemotron-register-vlm-") as tmp:
-        config_path = Path(tmp) / "config.json"
-        config_path.write_text(json.dumps({
-            "port": PYFUNC_PORT, "startup_timeout_s": 1800,
-            "vllm": asdict(cfg),  # every field; VLLMChatModel.load_context rebuilds the same config
-        }, indent=2))
-        artifacts = {"model_dir": str(merged_dir), "config": str(config_path)}
+        def write_config(name: str, vllm_cfg) -> str:
+            path = Path(tmp) / name
+            path.write_text(json.dumps({
+                "port": PYFUNC_PORT, "startup_timeout_s": 1800,
+                "vllm": asdict(vllm_cfg),  # every field; VLLMChatModel.load_context rebuilds the same config
+            }, indent=2))
+            return str(path)
+
+        artifacts = {"model_dir": str(merged_dir), "config": write_config("config.json", cfg)}
+        # The smoke config differs only in the memory cap (e.g. an A10G's budget on this H100), when one is set.
+        smoke_artifacts = {**artifacts, "config": write_config("smoke_config.json",
+                                                              with_gpu_budget(cfg, smoke_gpu_budget_gib))}
 
         # Smoke test: the pyfunc exactly as serving will run it (load_context starts vLLM; predict per record).
         model = VLLMChatModel()
         t0 = time.monotonic()
-        model.load_context(SimpleNamespace(artifacts=artifacts))
+        model.load_context(SimpleNamespace(artifacts=smoke_artifacts))
         try:
             df = pd.DataFrame([{"image": base64.b64encode(smoke_sample.image).decode(), "id": "smoke-0"}])
             out = model.predict(None, df, params=SERVING_PARAMS)
