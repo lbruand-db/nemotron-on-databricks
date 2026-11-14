@@ -76,6 +76,18 @@ def test_conversation_format_matches_training():
     assert json.loads(target_text(GT)) == GT and "ICED TEA" in target_text(GT)
 
 
+def test_build_vlm_request(tmp_path):
+    from nemotron_dbx.lifecycle.query import build_vlm_request
+
+    img = tmp_path / "r.png"
+    img.write_bytes(_png())
+    body = build_vlm_request([str(img)])
+    assert body["params"] == {"max_tokens": 1536} and set(body["dataframe_records"][0]) == {"image", "id"}
+    body = build_vlm_request([str(img), str(img)], instruction="Total only.", max_tokens=64)
+    assert [r["instruction"] for r in body["dataframe_records"]] == ["Total only."] * 2
+    assert body["params"] == {"max_tokens": 64}
+
+
 def test_build_chat_request(tmp_path):
     from nemotron_dbx.lifecycle.query import build_chat_request
 

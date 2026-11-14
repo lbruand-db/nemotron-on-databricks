@@ -59,12 +59,12 @@ tools/air_wait.sh <JOB_RUN_ID>          # REGISTRATION_RESULT={... "model_versio
 python -m nemotron_dbx.lifecycle.deploy --model-name <CATALOG>.<SCHEMA>.nemotron_nano_12b_v2_vl_ft --model-version <N> \
   --endpoint-name nemotron-nano-vl-ft --workload-type GPU_MEDIUM --profile <PROFILE>
 tools/endpoint_wait.sh nemotron-nano-vl-ft <PROFILE>
-python -m nemotron_dbx.lifecycle.query --endpoint-name nemotron-nano-vl-ft receipt.png --profile <PROFILE>
+python -m nemotron_dbx.lifecycle.query --endpoint-name nemotron-nano-vl-ft --vlm receipt.png --profile <PROFILE>
 ```
 
 `VLLM_TEST_FORCE_FP8_MARLIN=1` makes the H100 smoke test use the same FP8 kernels (Marlin, W8A16) as the A10G; on the A10G they are the default anyway. `smoke_gpu_budget_gib=20.2` caps the smoke test at the A10G's memory, so a config that doesn't fit fails at registration rather than after the deployment. The registered serving config keeps `gpu_memory_utilization` 0.90.
 
-The pyfunc takes one record per receipt, `{"image": "<base64>", "id": "...", "instruction": "<optional>"}`, and returns `{id, text, fields, json_valid, usage, latency_s}`, where `fields` is the parsed JSON.
+The pyfunc takes one record per receipt, `{"image": "<base64>", "id": "...", "instruction": "<optional>"}`, with params `{"max_tokens": 1536}`. It returns `{id, text, fields, json_valid, usage, latency_s}`, where `fields` is the parsed JSON. `query --vlm` builds that request; `--instruction` and `--max-tokens` set the optional fields.
 
 **Custom LLM Serving variant** (`--override parameters.serving=custom_llm`): the endpoint takes OpenAI chat requests (`query --chat`). The image goes in as a base64 data URL (see `nemotron_dbx.lifecycle.query.build_chat_request`):
 
@@ -95,7 +95,9 @@ Observed on 2026-11-12 (`fevm-am-rag-fevm`, 1× H100; HF revision `ca9543b1`, CO
 - **Fine-tuned model:** learns the CORD schema, including the dict/list distinction for `menu` and `sub` items. Its median latency in vLLM is 3.4 s per receipt with 16 concurrent requests.
 - **Reproduced on `e2-demo-field-eng`** (2026-11-13): field F1 0.382 → 0.858, TED 0.447 → 0.926.
 - **FP8** (`eval.yaml`, A10G kernels, vLLM capped at 20.2 GiB): test field F1 **0.847**, TED 0.910, exact match 0.37, valid JSON 0.99. That is −0.011 F1 / −0.016 TED against bf16 on the same run. Weights take 14.5 GiB, leaving 2.9 GiB for the KV cache and Mamba state.
-- **Serving** (`e2-demo-field-eng`, `GPU_MEDIUM` 1× A10G, classic pyfunc v3, FP8): READY ~57 min after deploy (container build, then vLLM start). Warm requests take **~4 s** in the model (4.0 / 4.2 s) and 8–11 s end to end from a laptop. The two held-out receipts tested came back as valid JSON with field F1 0.857 each: one missed field (`num` or `menuqty_cnt`) and one extra (`unitprice` or `cnt`) per receipt.
+- **Serving** (`e2-demo-field-eng`, `GPU_MEDIUM` 1× A10G, classic pyfunc v3, FP8): READY ~57 min after deploy (container build, then vLLM start). Warm requests take **~4 s** in the model (4.0 / 4.2 s) and 8–11 s end to end from a laptop. The two held-out receipts tested came back as valid JSON with field F1 0.857 each: one missed field (`num` or `menuqty_cnt`) and one extra (`unitprice` or `cnt`) per receipt. Both receipts in one `--vlm` request take 6.9–7.6 s each, processed concurrently.
+- **Scale to zero:** a scaled-to-zero endpoint rejects large requests ("Max request size exceeded for a scale to zero endpoint"). A 7.7 MB PNG was refused, a 338 KB one was accepted. The cold start (new container, then vLLM loading and quantizing the weights) took longer than the SDK's 5 min request timeout, so the first request fails with a timeout while the endpoint keeps scaling up. Wake it with a small image and retry, or disable scale-to-zero (`deploy --no-scale-to-zero`) for interactive use.
+- **Instructions:** `--instruction` reaches the model, but the fine-tuned model still answers in the CORD schema it was trained on (asked for the total only, it returned the full receipt). Use the base model, or train on varied instructions, for free-form questions.
 
 The AIR MLflow run contains:
 - the parameters;
