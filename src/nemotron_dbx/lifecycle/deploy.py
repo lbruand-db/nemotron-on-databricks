@@ -13,19 +13,18 @@ from __future__ import annotations
 import argparse
 import json
 
+# Workload types the API accepts but older databricks-sdk enums don't list. The SDK sends them fine (see
+# `_RawWorkloadType`) but reads them back as None, so endpoint state is compared on the raw API JSON instead.
+EXTRA_WORKLOAD_TYPES = ("GPU_LARGE_RTX",)
 
-def _enum_value(value):
-    return value.value if hasattr(value, "value") else value
+
+def _entity_key(e: dict) -> tuple:
+    return (e.get("entity_name"), str(e.get("entity_version")), e.get("workload_type"), e.get("workload_size"),
+            bool(e.get("scale_to_zero_enabled", False)))
 
 
-def _entity_matches(entity, desired) -> bool:
-    return all([
-        entity.entity_name == desired.entity_name,
-        str(entity.entity_version) == str(desired.entity_version),
-        _enum_value(entity.workload_type) == _enum_value(desired.workload_type),
-        entity.workload_size == desired.workload_size,
-        entity.scale_to_zero_enabled == desired.scale_to_zero_enabled,
-    ])
+def _entity_matches(entity: dict, desired: dict) -> bool:
+    return _entity_key(entity) == _entity_key(desired)
 
 
 class _RawWorkloadType(str):
@@ -42,11 +41,14 @@ def workload_type(name: str):
     try:
         return ServingModelWorkloadType(name)
     except ValueError:
-        return _RawWorkloadType(name)
+        if name in EXTRA_WORKLOAD_TYPES:
+            return _RawWorkloadType(name)
+        known = sorted({t.value for t in ServingModelWorkloadType} | set(EXTRA_WORKLOAD_TYPES))
+        raise ValueError(f"Unknown workload type {name!r}; expected one of {known}") from None
 
 
-def _served(config) -> list:
-    return list(config.served_entities or []) if config else []
+def _served(config: dict | None) -> list[dict]:
+    return list((config or {}).get("served_entities") or [])
 
 
 def submit(client, endpoint_name: str, desired) -> str:
@@ -54,27 +56,27 @@ def submit(client, endpoint_name: str, desired) -> str:
     from databricks.sdk.service.serving import EndpointCoreConfigInput
 
     try:
-        existing = client.serving_endpoints.get(endpoint_name)
+        existing = client.api_client.do("GET", f"/api/2.0/serving-endpoints/{endpoint_name}")
     except ResourceDoesNotExist:
         client.serving_endpoints.create(
             name=endpoint_name, config=EndpointCoreConfigInput(name=endpoint_name, served_entities=[desired])
         )
         return "created"
 
-    current = _served(existing.config)
-    pending = _served(existing.pending_config)
-    state = existing.state
-    in_progress = bool(state and state.config_update and _enum_value(state.config_update) == "IN_PROGRESS")
+    want = desired.as_dict()
+    current = _served(existing.get("config"))
+    pending = _served(existing.get("pending_config"))
+    in_progress = (existing.get("state") or {}).get("config_update") == "IN_PROGRESS"
     if len(current) > 1:
         raise ValueError(f"Refusing to replace {endpoint_name}: it has multiple served entities.")
-    observed = {e.entity_name for e in current + (pending if in_progress else []) if e.entity_name}
-    if observed and observed != {desired.entity_name}:
+    observed = {e["entity_name"] for e in current + (pending if in_progress else []) if e.get("entity_name")}
+    if observed and observed != {want["entity_name"]}:
         raise ValueError(f"Refusing to replace {endpoint_name}: it serves {sorted(observed)}.")
     if in_progress:
-        if len(pending) == 1 and _entity_matches(pending[0], desired):
+        if len(pending) == 1 and _entity_matches(pending[0], want):
             return "already updating"
         raise RuntimeError(f"{endpoint_name} has a different update in progress; retry when it finishes.")
-    if len(current) == 1 and _entity_matches(current[0], desired):
+    if len(current) == 1 and _entity_matches(current[0], want):
         return "unchanged"
     client.serving_endpoints.update_config(name=endpoint_name, served_entities=[desired])
     return "updated"
@@ -94,11 +96,15 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--no-scale-to-zero", action="store_true")
     ap.add_argument("--profile")
     args = ap.parse_args(argv)
+    try:
+        wtype = workload_type(args.workload_type)
+    except ValueError as e:
+        ap.error(str(e))
 
     desired = ServedEntityInput(
         entity_name=args.model_name,
         entity_version=str(args.model_version),
-        workload_type=workload_type(args.workload_type),
+        workload_type=wtype,
         workload_size=args.workload_size,
         scale_to_zero_enabled=not args.no_scale_to_zero,
     )
