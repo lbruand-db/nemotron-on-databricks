@@ -315,3 +315,15 @@ def test_vllm_pyfunc_predict_contract():
     assert out[1]["fields"] is None and not out[1]["json_valid"] and out[1]["error"] == "boom"
     texts = [c[1]["content"][1]["text"] for c in m.server.convs]
     assert texts == [INSTRUCTION, "Only the total."]  # NaN instruction in row a falls back to the default
+
+
+def test_check_merged_dir(tmp_path):
+    from nemotron_dbx.vlm.merge import check_merged_dir
+
+    with pytest.raises(SystemExit, match="save_merged"):
+        check_merged_dir("", "run1")
+    (tmp_path / "config.json").write_text("{}")
+    with pytest.raises(SystemExit, match="incomplete"):
+        check_merged_dir(str(tmp_path), "run1")
+    (tmp_path / "model.safetensors.index.json").write_text("{}")
+    assert check_merged_dir(str(tmp_path), "run1") == tmp_path

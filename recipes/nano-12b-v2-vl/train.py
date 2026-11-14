@@ -26,6 +26,7 @@ from nemotron_dbx.common import mlflow_utils as mlf
 from nemotron_dbx.common.hf import CORD_V2, NANO_VL_V2
 from nemotron_dbx.common.params import build_config, load_parameters
 from nemotron_dbx.common.paths import run_dir, scratch_dir
+from nemotron_dbx.vlm.merge import MERGED_DIR_TAG
 
 BASE_PATTERNS = ["*.safetensors", "*.json", "*.py", "*.jinja", "*.md", "LICENSE*"]
 
@@ -150,7 +151,7 @@ def main() -> None:
     mlf.log_artifact(str(adapter_local / "adapter_config.json"), "adapter")
     mlf.set_tags({
         "nemotron.recipe": "nano-12b-v2-vl", "nemotron.adapter_dir": out / "adapter",
-        "nemotron.merged_dir": merged_dir if p.save_merged else "", "nemotron.sample_image": sample,
+        MERGED_DIR_TAG: merged_dir if p.save_merged else "", "nemotron.sample_image": sample,
     })
     keys = ("test/field_f1", "test/ted_acc", "test/json_valid")
     print("TRAINING_RESULT=" + json.dumps({

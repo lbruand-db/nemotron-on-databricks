@@ -13,11 +13,10 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-import mlflow
-
 from nemotron_dbx.common.params import build_config, load_parameters
 from nemotron_dbx.lifecycle.register import register_vlm, register_vlm_pyfunc
 from nemotron_dbx.vlm.data import VLSample
+from nemotron_dbx.vlm.merge import MERGED_DIR_TAG, merged_checkpoint
 
 
 @dataclass
@@ -32,12 +31,7 @@ class Params:
 
 def main() -> None:
     p = build_config(Params, load_parameters())
-    if not p.source_training_run_id:
-        raise SystemExit("Set parameters.source_training_run_id (the stage-1 MLFLOW_RUN_ID)")
-    tags = mlflow.MlflowClient().get_run(p.source_training_run_id).data.tags
-    merged = tags.get("nemotron.merged_dir")
-    if not merged or not (Path(merged) / "config.json").is_file():
-        raise SystemExit(f"No merged checkpoint for run {p.source_training_run_id} (nemotron.merged_dir={merged!r})")
+    merged, tags = merged_checkpoint(p.source_training_run_id)
     if p.serving not in ("pyfunc", "custom_llm"):
         raise SystemExit(f"serving must be pyfunc or custom_llm, got {p.serving!r}")
     register = register_vlm_pyfunc if p.serving == "pyfunc" else register_vlm
@@ -46,7 +40,7 @@ def main() -> None:
         registered_model_name=p.registered_model_name,
         smoke_sample=VLSample(Path(tags["nemotron.sample_image"]).read_bytes(), {}),
         source_training_run_id=p.source_training_run_id,
-        extra_tags={"nemotron.merged_dir": merged},
+        extra_tags={MERGED_DIR_TAG: str(merged)},
         vllm_extra_args=tuple(p.vllm_extra_args.split()),
         vllm_env=tuple(p.vllm_env.split()),
         smoke_gpu_budget_gib=p.smoke_gpu_budget_gib,

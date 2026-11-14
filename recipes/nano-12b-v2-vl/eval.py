@@ -14,9 +14,6 @@ import json
 import shutil
 import time
 from dataclasses import asdict, dataclass
-from pathlib import Path
-
-import mlflow
 
 from nemotron_dbx.common import mlflow_utils as mlf
 from nemotron_dbx.common.params import build_config, load_parameters
@@ -39,17 +36,13 @@ class Params:
 def main() -> None:
     from nemotron_dbx.vlm.data import load_cord
     from nemotron_dbx.vlm.evaluate import evaluate_with_vllm
+    from nemotron_dbx.vlm.merge import merged_checkpoint
     from nemotron_dbx.vlm.vllm_server import VLLMConfig, gpu_total_gib, with_gpu_budget
 
     p = build_config(Params, load_parameters())
     print(f"[setup] params: {asdict(p)}", flush=True)
     mlf.log_params(asdict(p))
-    if not p.source_training_run_id:
-        raise SystemExit("Set parameters.source_training_run_id (the stage-1 MLFLOW_RUN_ID)")
-    tags = mlflow.MlflowClient().get_run(p.source_training_run_id).data.tags
-    merged = tags.get("nemotron.merged_dir")
-    if not merged or not (Path(merged) / "config.json").is_file():
-        raise SystemExit(f"No merged checkpoint for run {p.source_training_run_id} (nemotron.merged_dir={merged!r})")
+    merged, _ = merged_checkpoint(p.source_training_run_id)
 
     scratch = scratch_dir("nano-vl-eval")
     local = scratch / "merged"
@@ -75,7 +68,7 @@ def main() -> None:
     print("[eval] metrics:", json.dumps(metrics, indent=1), flush=True)
 
     # Outputs first, so a logging problem can't lose a finished eval.
-    out = Path(merged).parent / f"predictions_ft_{p.tag}.json"
+    out = merged.parent / f"predictions_ft_{p.tag}.json"
     out.write_text(json.dumps(preds, ensure_ascii=False, indent=1))
     mlf.log_artifact(str(scratch / "vllm.log"))
     # This run, and the stage-1 run next to its base/ and ft/ metrics. Same sanitized keys, one batch each.

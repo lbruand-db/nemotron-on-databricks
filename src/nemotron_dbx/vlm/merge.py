@@ -15,6 +15,30 @@ import time
 from pathlib import Path
 
 PEFT_PREFIX = "base_model.model."
+MERGED_DIR_TAG = "nemotron.merged_dir"  # set by the training recipe on its MLflow run
+
+
+def check_merged_dir(merged: str | None, training_run_id: str) -> Path:
+    """Fail early, with the reason, unless `merged` is a complete merged checkpoint."""
+    if not merged:
+        raise SystemExit(f"Run {training_run_id} has no {MERGED_DIR_TAG} tag: it isn't a finished training run, or "
+                         "it ran with save_merged=false. Re-run training with save_merged=true.")
+    path = Path(merged)
+    missing = [f for f in ("config.json", "model.safetensors.index.json") if not (path / f).is_file()]
+    if missing:
+        raise SystemExit(f"Merged checkpoint {path} of run {training_run_id} is incomplete (missing {missing})")
+    return path
+
+
+def merged_checkpoint(training_run_id: str) -> tuple[Path, dict[str, str]]:
+    """The merged checkpoint saved by a training run, plus that run's tags (registration also needs
+    `nemotron.sample_image`)."""
+    if not training_run_id:
+        raise SystemExit("Set parameters.source_training_run_id (the stage-1 MLFLOW_RUN_ID)")
+    import mlflow
+
+    tags = mlflow.MlflowClient().get_run(training_run_id).data.tags
+    return check_merged_dir(tags.get(MERGED_DIR_TAG), training_run_id), tags
 
 
 def lora_pairs(adapter_tensors: dict, prefix: str = PEFT_PREFIX) -> dict[str, tuple]:
