@@ -7,6 +7,7 @@ The Custom LLM Serving entrypoint must match the command that was tested (docs),
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import time
@@ -14,6 +15,8 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+
+_ENV_ITEM = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=\S*")
 
 
 @dataclass(frozen=True)
@@ -27,6 +30,13 @@ class VLLMConfig:
     # Extra NAME=VALUE environment for the vLLM process, e.g. ("VLLM_TEST_FORCE_FP8_MARLIN=1",) to run the A10G
     # FP8 kernels (Marlin, W8A16) on an H100 smoke test.
     env: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        # Each item lands in an `env NAME=VALUE ... python` prefix: anything else would become the program `env`
+        # runs (or an `env` option such as -i, which clears the environment).
+        bad = [item for item in self.env if not _ENV_ITEM.fullmatch(item)]
+        if bad:
+            raise ValueError(f"VLLMConfig.env items must be NAME=VALUE, got {bad}")
 
 
 def vllm_command(model: str, served_model_name: str, port: int, cfg: VLLMConfig | None = None,

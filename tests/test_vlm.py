@@ -93,6 +93,9 @@ def test_vllm_command_env_and_extra_args():
     cmd = vllm_command("m", "m", 8080, cfg)
     assert cmd[:4] == ["env", "VLLM_USE_FLASHINFER_SAMPLER=0", "HF_HUB_OFFLINE=1", "VLLM_TEST_FORCE_FP8_MARLIN=1"]
     assert cmd[-2:] == ["--quantization", "fp8"]
+    for bad in ("VLLM_TEST_FORCE_FP8_MARLIN", "-i", "1X=2", "A=b c"):
+        with pytest.raises(ValueError, match="NAME=VALUE"):
+            VLLMConfig(env=(bad,))
 
 
 # --- training schedule ---
