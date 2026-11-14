@@ -39,6 +39,11 @@ class VLLMConfig:
             raise ValueError(f"VLLMConfig.env items must be NAME=VALUE, got {bad}")
 
 
+def vllm_config_from_json(d: dict) -> VLLMConfig:
+    """Inverse of `dataclasses.asdict(cfg)` after a JSON round trip (tuples come back as lists)."""
+    return VLLMConfig(**{k: tuple(v) if isinstance(v, list) else v for k, v in d.items()})
+
+
 def vllm_command(model: str, served_model_name: str, port: int, cfg: VLLMConfig | None = None,
                  python: str = "python") -> list[str]:
     cfg = cfg or VLLMConfig()

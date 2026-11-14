@@ -15,7 +15,7 @@ import os
 import shutil
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -353,9 +353,7 @@ def register_vlm_pyfunc(
         config_path = Path(tmp) / "config.json"
         config_path.write_text(json.dumps({
             "port": PYFUNC_PORT, "startup_timeout_s": 1800,
-            "vllm": {"max_model_len": cfg.max_model_len, "gpu_memory_utilization": cfg.gpu_memory_utilization,
-                     "max_num_seqs": cfg.max_num_seqs, "extra_args": list(cfg.extra_args),
-                     "env": list(cfg.env)},
+            "vllm": asdict(cfg),  # every field; VLLMChatModel.load_context rebuilds the same config
         }, indent=2))
         artifacts = {"model_dir": str(merged_dir), "config": str(config_path)}
 

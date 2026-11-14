@@ -55,10 +55,10 @@ class VLLMChatModel(PythonModel):
     """Classic pyfunc: vLLM OpenAI server in a subprocess, CORD extraction per record."""
 
     def load_context(self, context) -> None:
-        from .vllm_server import VLLMConfig, VLLMServer
+        from .vllm_server import VLLMServer, vllm_config_from_json
 
         cfg = json.loads(Path(context.artifacts["config"]).read_text())
-        vllm_cfg = VLLMConfig(**{k: tuple(v) if isinstance(v, list) else v for k, v in cfg["vllm"].items()})
+        vllm_cfg = vllm_config_from_json(cfg["vllm"])
         self.server = VLLMServer(
             context.artifacts["model_dir"], served_model_name="nano-vl", port=cfg.get("port", PYFUNC_PORT),
             cfg=vllm_cfg, log_path=None, reuse_running=True,

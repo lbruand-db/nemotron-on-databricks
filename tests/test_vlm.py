@@ -9,7 +9,7 @@ from nemotron_dbx.vlm import compat
 from nemotron_dbx.vlm.data import INSTRUCTION, SYSTEM, VLSample, openai_messages, target_text
 from nemotron_dbx.vlm.lora import lr_factor, rank_slice
 from nemotron_dbx.vlm.metrics import extraction_metrics, field_f1, normalize, parse_json_output, ted_accuracy
-from nemotron_dbx.vlm.vllm_server import VLLMConfig, vllm_command
+from nemotron_dbx.vlm.vllm_server import VLLMConfig, vllm_command, vllm_config_from_json
 
 GT = {
     "menu": [{"nm": "ICED TEA", "cnt": "1", "price": "20,000"}, {"nm": "NASI", "cnt": "2", "price": "50,000"}],
@@ -96,6 +96,15 @@ def test_vllm_command_env_and_extra_args():
     for bad in ("VLLM_TEST_FORCE_FP8_MARLIN", "-i", "1X=2", "A=b c"):
         with pytest.raises(ValueError, match="NAME=VALUE"):
             VLLMConfig(env=(bad,))
+
+
+
+def test_vllm_config_json_round_trip():
+    import dataclasses
+    import json
+
+    cfg = VLLMConfig(max_num_seqs=8, extra_args=("--quantization", "fp8"), env=("A=1",))
+    assert vllm_config_from_json(json.loads(json.dumps(dataclasses.asdict(cfg)))) == cfg
 
 
 # --- training schedule ---
