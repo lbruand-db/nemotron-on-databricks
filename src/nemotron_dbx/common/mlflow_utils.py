@@ -19,8 +19,10 @@ def run_id() -> str | None:
     return os.environ.get("MLFLOW_RUN_ID")
 
 
-def log_metrics(metrics: Mapping[str, float], step: int | None = None, prefix: str = "") -> None:
-    rid = run_id()
+def log_metrics(metrics: Mapping[str, float], step: int | None = None, prefix: str = "",
+                target_run_id: str | None = None) -> None:
+    """One `log_batch` into this attempt's run, or into `target_run_id` (e.g. the stage-1 run being evaluated)."""
+    rid = target_run_id or run_id()
     if not rid or not dist.is_main():
         return
     import time

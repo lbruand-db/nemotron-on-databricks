@@ -74,13 +74,13 @@ def main() -> None:
     print("[eval] vLLM memory lines:\n" + "\n".join(memory_lines[-8:]), flush=True)
     print("[eval] metrics:", json.dumps(metrics, indent=1), flush=True)
 
-    mlf.log_metrics(metrics, prefix=f"ft_{p.tag}/")  # this run
-    client = mlflow.MlflowClient()  # and the stage-1 run, next to base/ and ft/
-    for k, v in metrics.items():
-        client.log_metric(p.source_training_run_id, f"ft_{p.tag}/{k}", v)
+    # Outputs first, so a logging problem can't lose a finished eval.
     out = Path(merged).parent / f"predictions_ft_{p.tag}.json"
     out.write_text(json.dumps(preds, ensure_ascii=False, indent=1))
     mlf.log_artifact(str(scratch / "vllm.log"))
+    # This run, and the stage-1 run next to its base/ and ft/ metrics. Same sanitized keys, one batch each.
+    mlf.log_metrics(metrics, prefix=f"ft_{p.tag}/")
+    mlf.log_metrics(metrics, prefix=f"ft_{p.tag}/", target_run_id=p.source_training_run_id)
     print("EVAL_RESULT=" + json.dumps({"tag": p.tag, "vllm": asdict(cfg), "gpu_total_gib": round(total_gib, 1),
                                        **{k: v for k, v in metrics.items() if k.startswith("test/")}}), flush=True)
 
