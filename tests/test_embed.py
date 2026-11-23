@@ -90,6 +90,9 @@ def test_model_signature_accepts_documented_requests():
     for req in ([{"text": "x"}], [{"text": "x", "id": 3, "input_type": "query"}], [{"text": "x", "id": "d1"}]):
         _enforce_schema(pd.DataFrame(req), sig.inputs)  # text only, integer ids and string ids all pass
     assert sig.params.to_dict() == [{"name": "dimensions", "type": "long", "default": 4096, "shape": None}]
+    # Unity Catalog refuses input-only signatures ("must be logged with ... both input and output").
+    assert sig.outputs is not None and {c.name for c in sig.outputs.inputs} == {"id", "input_type", "dimensions",
+                                                                                "embedding"}
 
 
 def test_parse_dimensions():

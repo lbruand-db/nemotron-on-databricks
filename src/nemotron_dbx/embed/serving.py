@@ -67,13 +67,17 @@ def parse_dimensions(params: dict[str, Any] | None) -> int:
 
 def model_signature():
     """Explicit signature. Inferring it from the smoke DataFrame would make `id` and `input_type` required and type
-    `id` as a string, so `{"text": ...}` alone or integer ids would be rejected before `predict` runs."""
+    `id` as a string, so `{"text": ...}` alone or integer ids would be rejected before `predict` runs. Unity
+    Catalog also requires an output schema."""
     from mlflow.models import ModelSignature
-    from mlflow.types.schema import AnyType, ColSpec, ParamSchema, ParamSpec, Schema
+    from mlflow.types.schema import AnyType, Array, ColSpec, DataType, ParamSchema, ParamSpec, Schema
 
     inputs = Schema([ColSpec("string", "text"), ColSpec("string", "input_type", required=False),
                      ColSpec(AnyType(), "id", required=False)])
-    return ModelSignature(inputs=inputs, params=ParamSchema([ParamSpec("dimensions", "long", 4096)]))
+    outputs = Schema([ColSpec(AnyType(), "id"), ColSpec("string", "input_type"), ColSpec("long", "dimensions"),
+                      ColSpec(Array(DataType.float), "embedding")])
+    return ModelSignature(inputs=inputs, outputs=outputs,
+                          params=ParamSchema([ParamSpec("dimensions", "long", 4096)]))
 
 
 class VLLMEmbedModel(PythonModel):
