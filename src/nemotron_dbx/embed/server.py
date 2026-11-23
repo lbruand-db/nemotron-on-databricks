@@ -70,6 +70,18 @@ def vllm_embed_command(model: str, served_model_name: str, port: int, cfg: VLLMC
     ]
 
 
+def parse_dims_list(spec: str) -> list[int]:
+    """"4096,2048,1024" -> [4096, 2048, 1024], each in 1..4096, so a typo fails before the model download."""
+    try:
+        dims = [int(d) for d in spec.split(",") if d.strip()]
+    except ValueError:
+        raise ValueError(f"dims must be comma-separated integers, got {spec!r}") from None
+    bad = [d for d in dims if not 0 < d <= FULL_DIM]
+    if not dims or bad:
+        raise ValueError(f"dims must be integers in 1..{FULL_DIM}, got {spec!r}")
+    return dims
+
+
 def truncate_normalize(x: np.ndarray, dims: int | None) -> np.ndarray:
     """Keep the first `dims` coordinates and re-normalize (L2), as the model card prescribes for smaller sizes."""
     x = np.asarray(x, dtype=np.float32)

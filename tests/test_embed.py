@@ -7,6 +7,7 @@ from nemotron_dbx.embed.server import (
     CARD_SCORES,
     EMBED_VLLM,
     PREFIXES,
+    parse_dims_list,
     retryable,
     truncate_normalize,
     vllm_embed_command,
@@ -109,3 +110,10 @@ def test_retryable_only_transient_errors():
     assert retryable(requests.ConnectionError()) and retryable(requests.Timeout())
     assert retryable(http(503)) and retryable(http(429))
     assert not retryable(http(400)) and not retryable(http(404)) and not retryable(ValueError())
+
+
+def test_parse_dims_list():
+    assert parse_dims_list("4096,2048,1024") == [4096, 2048, 1024] and parse_dims_list(" 512 ") == [512]
+    for bad in ("4096,8192", "0", "", "4096,abc"):
+        with pytest.raises(ValueError):
+            parse_dims_list(bad)

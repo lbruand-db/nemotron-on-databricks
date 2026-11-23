@@ -41,13 +41,23 @@ class Params:
 def main() -> None:
     from nemotron_dbx.embed.data import ALLOPROF, load_alloprof
     from nemotron_dbx.embed.metrics import retrieval_metrics
-    from nemotron_dbx.embed.server import EMBED_VLLM, card_check, embed_texts, truncate_normalize, vllm_embed_command
+    from nemotron_dbx.embed.server import (
+        EMBED_VLLM,
+        card_check,
+        embed_texts,
+        parse_dims_list,
+        truncate_normalize,
+        vllm_embed_command,
+    )
     from nemotron_dbx.vlm.vllm_server import VLLMServer, gpu_total_gib, with_gpu_budget
 
     p = build_config(Params, load_parameters())
     print(f"[setup] params: {asdict(p)}", flush=True)
     mlf.log_params(asdict(p))
-    dims = [int(d) for d in p.dims.split(",") if d.strip()]
+    try:
+        dims = parse_dims_list(p.dims)  # before the 16 GB download and the vLLM start
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
     t0 = time.monotonic()
     out = run_dir(p.output_root)
     out.mkdir(parents=True, exist_ok=True)
