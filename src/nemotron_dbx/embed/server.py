@@ -73,7 +73,7 @@ def vllm_embed_command(model: str, served_model_name: str, port: int, cfg: VLLMC
 def truncate_normalize(x: np.ndarray, dims: int | None) -> np.ndarray:
     """Keep the first `dims` coordinates and re-normalize (L2), as the model card prescribes for smaller sizes."""
     x = np.asarray(x, dtype=np.float32)
-    if dims:
+    if dims is not None:  # None = full size; 0 or negative is an error, not "no truncation"
         if not 0 < dims <= x.shape[-1]:
             raise ValueError(f"dimensions must be in 1..{x.shape[-1]}, got {dims}")
         x = x[..., :dims]

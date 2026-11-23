@@ -14,8 +14,9 @@ def test_truncate_normalize():
     np.testing.assert_allclose(np.linalg.norm(full, axis=1), 1.0, rtol=1e-6)
     two = truncate_normalize(x, 2)
     np.testing.assert_allclose(two[0], [0.6, 0.8], rtol=1e-6)
-    with pytest.raises(ValueError):
-        truncate_normalize(x, 4)
+    for bad in (4, 0, -1):
+        with pytest.raises(ValueError):
+            truncate_normalize(x, bad)
 
 
 def test_retrieval_metrics_perfect_and_partial():
