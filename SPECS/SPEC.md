@@ -314,6 +314,42 @@ NeMo AutoModel has no Nano v2 VL recipe, and Megatron-Bridge has removed support
 - **Alternative: no merge.** Serve the base model with `--enable-lora` and the adapter, if Custom LLM Serving allows passing adapter artifacts (stretch).
 - **Client:** `query_endpoint.py` sends an OpenAI-format chat request with an `image_url` data URL.
 
+### 6.6 Embeddings (TODO, M6: eval + serve, no fine-tuning)
+
+Not started. Scope agreed on 2026-11-23: **evaluate and serve** a Nemotron embedding model for indexing the
+extracted content (RAG, search). No fine-tuning in v1, so this recipe breaks the "fine-tune and serve" pattern on
+purpose.
+
+Candidates (model cards read on 2026-11-23):
+
+| | [`nvidia/Nemotron-3-Embed-8B-BF16`](https://huggingface.co/nvidia/Nemotron-3-Embed-8B-BF16) | [`nvidia/llama-embed-nemotron-8b`](https://huggingface.co/nvidia/llama-embed-nemotron-8b) |
+|---|---|---|
+| **License** | **OpenMDW-1.1** (Apache-2.0 also cited): "ready for commercial use" | **customized NSCL v1: "non-commercial/research use only"**, plus the Llama 3.1 Community License |
+| Base | Ministral-3-8B, bidirectional encoder | Llama-3.1-8B, bidirectional attention |
+| Released | 2026-07-16 | 2025 (MMTEB rank 1 as of 2025-10-21) |
+| Dimensions | 4,096; **truncatable** (e.g. 2,048, 1,024; re-normalize after slicing) | 4,096 (no smaller sizes documented) |
+| Context | 32,768 tokens (evaluated at 4,096) | 32,768 tokens |
+| Languages | 34, **French included** | Multilingual (MMTEB), languages not listed |
+| Prompts | `query:` / `passage:` prefixes; average pooling, L2-normalized | `Instruct: {task}\nQuery: {q}` for queries, no document prefix; average pooling, L2-normalized |
+| Reported quality | MMTEB retrieval NDCG@10 **75.45**, RTEB 78.46 (1B sibling: 71.04 / 72.38) | MMTEB(Multilingual, v2) mean 69.46 (all task types, not comparable to the retrieval column) |
+| Serving | vLLM (validated images v0.21.0 and **v0.24.0**, AIR ships 0.24; `/v2/embed` needs 0.25), sentence-transformers ≥ 5.4.1, transformers ≥ 5.2 | vLLM ≥ 0.14 (`runner="pooling"`), sentence-transformers; card pins transformers 4.51 |
+| GPU | Ampere/Hopper/Blackwell; tested on A100 and H100; FP8 via `--quantization fp8_per_tensor` (Hopper/Ada) | flash-attn 2.6.3 on GPU |
+| Smaller variants | Nemotron-3-Embed-1B-BF16, 1B-NVFP4 | none |
+
+Plan when picked up:
+- **Default to Nemotron-3-Embed-8B** (commercial). Keep llama-embed-nemotron-8b out of the default path; if it is
+  added at all, only as a clearly marked research-only comparison, because the README promises commercially usable
+  models. Consider the 1B sibling for cost.
+- **Serving:** both are ~16 GB in BF16, so they fit a 24 GB A10G (`GPU_MEDIUM`) on AWS; Azure Model Serving has no
+  A10G, so A100 (`GPU_LARGE`) there. Classic pyfunc running vLLM in pooling mode (Custom LLM Serving is blocked,
+  OQ-5), like `VLLMChatModel`.
+- **Eval:** recall@k / NDCG@10 of the base model. Nemotron-3-Embed's training data includes MIRACL and MLDR, so
+  don't use those as the test set; use a held-out set (e.g. QA pairs over documents extracted by this cookbook, or
+  the customer's documents) (OQ-19).
+- **Index limits:** 4,096 dims fit Databricks AI Search (max 4,096, divisible by 16 on storage-optimized
+  endpoints) but not a pgvector HNSW/IVFFlat index on Lakebase (2,000 for `vector`, 4,000 for `halfvec`).
+  Truncate Nemotron-3-Embed to 2,048 (`halfvec`) or 1,024 (`vector`) there; `lakebase_ann` documents no limit.
+
 ---
 
 ## 7. Optional: end-to-end pipeline demo (stretch)
@@ -377,6 +413,7 @@ Repo-level:
 | OQ-17 | **`env_pack="databricks_model_serving"` breaks classic pyfunc endpoints.** On T4 the server restarted every ~3 min right after "Downloads completed", with no traceback; on A10G the update was aborted ("endpoint update timed out"). The same model registered with pip requirements was READY on T4 in < 25 min. | Don't use `env_pack` for classic pyfuncs. If needed, raise it with the Model Serving team. |
 | OQ-18 | The Databricks CLI now prints a banner ("Databricks skills are not installed…") on stdout before `-o json` output, which breaks naive JSON parsing. | Tools parse from the first `{`. |
 | OQ-16 | **GPU capacity waits are invisible.** A `GPU_1xH100` run stayed task-`PENDING` ("In run") for 90 min, then `TIMEDOUT`, with no logs, while `air get` reported `RUNNING`. Earlier H100 runs started in seconds. | `tools/air_wait.sh` prints the task life-cycle state. Default small models to A10, and cap `timeout_minutes` on smoke runs. |
+| OQ-19 | Embedding eval set (M6): which held-out, license-clean, French/multilingual retrieval set? Nemotron-3-Embed was trained on MIRACL, MLDR, HotpotQA, NQ, SQuAD and more, so public sets risk contamination. | Open. Prefer QA pairs over cookbook-extracted documents, or the customer's documents. |
 | OQ-13 | Customer data: will the cookbook later be pointed at customer documents (in their own UC volume)? If so, each `prepare_data.py` needs a "bring your own COCO/JSONL" path. | Add a `dataset_source: hf|volume` parameter in v1 |
 
 ---
@@ -391,6 +428,7 @@ Repo-level:
 | M3 ✅ | `ocr-v1` (recognizer fine-tune, serving with the compiled extension) | A10, 8.6 min: **test GT-quad CER 4.95 % → 1.63 %**, word acc 88.5 → 95.3 %, end-to-end BoW F1 0.819 → 0.848. Endpoint `nemotron-ocr-v1-ft` (GPU_SMALL) READY in ~38 min (container build). No custom image. |
 | M4 ✅ | `nano-12b-v2-vl` LoRA → merged → serving | Trained: CORD test field F1 0.39 → 0.86, TED 0.45 → 0.93 (1×H100, 31 min) after patch 11; reproduced on e2-demo (0.38 → 0.86). **Served** on `e2-demo-field-eng` as a classic pyfunc (`VLLMChatModel`, v3) with FP8 weights on `GPU_MEDIUM` (A10G). READY ~57 min after deploy; ~4 s per receipt in the model; 2 held-out receipts give valid JSON with F1 0.86. FP8 eval: F1 0.847, TED 0.910. Custom LLM Serving is still blocked (OQ-5). |
 | M5 | Top-level README, metrics table, optional pipeline demo (§7) | |
+| M6 (TODO) | Embedding model: **eval + serve**, no fine-tuning (§6.6) | Not started. Default candidate `nvidia/Nemotron-3-Embed-8B-BF16` (commercial, OpenMDW-1.1). `nvidia/llama-embed-nemotron-8b` (requested 2026-11-23) is **non-commercial/research only**, so at most a marked comparison. Eval set: OQ-19. |
 
 ---
 
