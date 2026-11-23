@@ -437,10 +437,9 @@ def register_embed_pyfunc(
     import mlflow
     import numpy as np
     import pandas as pd
-    from mlflow.models import infer_signature
 
     from ..embed.server import CARD_DOCUMENTS, CARD_QUERIES, CARD_SCORES, EMBED_VLLM
-    from ..embed.serving import PYFUNC_PORT, VLLMEmbedModel
+    from ..embed.serving import PYFUNC_PORT, VLLMEmbedModel, model_signature
     from ..embed.serving import SERVING_PARAMS as EMBED_PARAMS
     from ..vlm.vllm_server import with_gpu_budget
 
@@ -480,8 +479,7 @@ def register_embed_pyfunc(
         if max_err > 0.03 or len(small[0]["embedding"]) != 1024:
             raise RuntimeError(f"Smoke test failed: max_err={max_err:.4f}, 1024-dim output "
                                f"{len(small[0]['embedding'])}\n{scores.round(4)}")
-        signature = infer_signature(df, [{"id": "q0", "input_type": "query", "dimensions": 4096,
-                                          "embedding": [0.0]}], params=EMBED_PARAMS)
+        signature = model_signature()
 
         reqs = _pip_requirements(extra=("vllm", "transformers", "tokenizers", "safetensors", "requests"),
                                  exact_torch=True)

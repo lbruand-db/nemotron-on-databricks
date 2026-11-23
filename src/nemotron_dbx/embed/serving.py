@@ -49,6 +49,17 @@ def parse_records(records: list[dict]) -> list[tuple[Any, str, str]]:
     return out
 
 
+def model_signature():
+    """Explicit signature. Inferring it from the smoke DataFrame would make `id` and `input_type` required and type
+    `id` as a string, so `{"text": ...}` alone or integer ids would be rejected before `predict` runs."""
+    from mlflow.models import ModelSignature
+    from mlflow.types.schema import AnyType, ColSpec, ParamSchema, ParamSpec, Schema
+
+    inputs = Schema([ColSpec("string", "text"), ColSpec("string", "input_type", required=False),
+                     ColSpec(AnyType(), "id", required=False)])
+    return ModelSignature(inputs=inputs, params=ParamSchema([ParamSpec("dimensions", "long", 4096)]))
+
+
 class VLLMEmbedModel(PythonModel):
     def load_context(self, context) -> None:
         from ..vlm.vllm_server import VLLMServer, vllm_config_from_json

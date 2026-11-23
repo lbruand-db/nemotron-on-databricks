@@ -67,3 +67,16 @@ def test_embed_request_and_summary():
              {"id": 1, "input_type": "document", "embedding": [0.0, 1.0]}]
     out = summarize_embeddings(preds)
     assert "dims=2" in out and "similarity:" in out
+
+
+def test_model_signature_accepts_documented_requests():
+    pytest.importorskip("mlflow")
+    import pandas as pd
+    from mlflow.models.utils import _enforce_schema
+
+    from nemotron_dbx.embed.serving import model_signature
+
+    sig = model_signature()
+    for req in ([{"text": "x"}], [{"text": "x", "id": 3, "input_type": "query"}], [{"text": "x", "id": "d1"}]):
+        _enforce_schema(pd.DataFrame(req), sig.inputs)  # text only, integer ids and string ids all pass
+    assert sig.params.to_dict() == [{"name": "dimensions", "type": "long", "default": 4096, "shape": None}]
