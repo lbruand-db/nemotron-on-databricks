@@ -23,8 +23,6 @@ from nemotron_dbx.common.hf import NEMOTRON_3_EMBED_8B
 from nemotron_dbx.common.params import build_config, load_parameters
 from nemotron_dbx.common.paths import run_dir, scratch_dir
 
-MODEL_PATTERNS = ["*.safetensors", "*.json", "LICENSE", "NOTICE"]
-
 
 @dataclass
 class Params:
@@ -46,6 +44,7 @@ def main() -> None:
         card_check,
         embed_texts,
         parse_dims_list,
+        snapshot_model,
         truncate_normalize,
         vllm_embed_command,
     )
@@ -64,7 +63,7 @@ def main() -> None:
 
     # 1. Model (~16 GB) and eval set, in parallel.
     with ThreadPoolExecutor(2) as pool:
-        snap = pool.submit(NEMOTRON_3_EMBED_8B.snapshot, scratch_dir("hf", "nemotron-3-embed-8b"), MODEL_PATTERNS)
+        snap = pool.submit(snapshot_model)
         ds = load_alloprof(scratch_dir("alloprof"), p.n_queries or None)
         model_dir = snap.result()
     print(f"[data] Alloprof: {len(ds.docs)} French reference pages, {len(ds.queries)} queries, "

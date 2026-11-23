@@ -14,10 +14,8 @@ from dataclasses import dataclass
 
 from nemotron_dbx.common.hf import NEMOTRON_3_EMBED_8B
 from nemotron_dbx.common.params import build_config, load_parameters
-from nemotron_dbx.common.paths import scratch_dir
+from nemotron_dbx.embed.server import snapshot_model
 from nemotron_dbx.lifecycle.register import register_embed_pyfunc
-
-MODEL_PATTERNS = ["*.safetensors", "*.json", "LICENSE", "NOTICE"]
 
 
 @dataclass
@@ -31,7 +29,7 @@ class Params:
 
 def main() -> None:
     p = build_config(Params, load_parameters())
-    model_dir = NEMOTRON_3_EMBED_8B.snapshot(scratch_dir("hf", "nemotron-3-embed-8b"), MODEL_PATTERNS)
+    model_dir = snapshot_model()  # same files as the eval
     result = register_embed_pyfunc(
         model_dir=model_dir,
         registered_model_name=p.registered_model_name,

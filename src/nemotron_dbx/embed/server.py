@@ -52,6 +52,19 @@ CARD_SCORES = np.array([
 ], dtype=np.float32)
 
 
+# Files of the pinned snapshot that eval and serving need: weights, configs (incl. sentence-transformers'
+# 1_Pooling/config.json, which tells vLLM to mean-pool), tokenizer, and the license notices.
+MODEL_PATTERNS = ["*.safetensors", "*.json", "LICENSE", "NOTICE"]
+
+
+def snapshot_model():
+    """The pinned Nemotron-3-Embed snapshot on local scratch (one definition for eval and registration)."""
+    from ..common.hf import NEMOTRON_3_EMBED_8B
+    from ..common.paths import scratch_dir
+
+    return NEMOTRON_3_EMBED_8B.snapshot(scratch_dir("hf", "nemotron-3-embed-8b"), MODEL_PATTERNS)
+
+
 def vllm_embed_command(model: str, served_model_name: str, port: int, cfg: VLLMConfig | None = None,
                        python: str = "python") -> list[str]:
     cfg = cfg or EMBED_VLLM
