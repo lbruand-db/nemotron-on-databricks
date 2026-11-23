@@ -81,6 +81,17 @@ def truncate_normalize(x: np.ndarray, dims: int | None) -> np.ndarray:
     return x / np.maximum(norm, 1e-12)
 
 
+def retryable(exc: Exception) -> bool:
+    """Transient failures only: connection errors, timeouts, 429 and 5xx. A 4xx is the request's fault."""
+    import requests
+
+    if isinstance(exc, requests.ConnectionError | requests.Timeout):
+        return True
+    response = getattr(exc, "response", None)
+    return isinstance(exc, requests.HTTPError) and response is not None and (
+        response.status_code == 429 or response.status_code >= 500)
+
+
 def embed_texts(port: int, served_model_name: str, texts: Sequence[str], input_type: str, dims: int | None = None,
                 batch_size: int = 32, concurrency: int = 4, max_tokens: int | None = None,
                 on_batch: Callable[[int], None] | None = None) -> np.ndarray:
@@ -105,8 +116,10 @@ def embed_texts(port: int, served_model_name: str, texts: Sequence[str], input_t
                 if on_batch:
                     on_batch(len(batch))
                 return [d["embedding"] for d in data]
-            except requests.RequestException:
-                if attempt == 2:
+            except requests.RequestException as exc:
+                if attempt == 2 or not retryable(exc):
+                    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+                        raise RuntimeError(f"vLLM {exc.response.status_code}: {exc.response.text[:500]}") from exc
                     raise
                 time.sleep(2 * (attempt + 1))
         raise AssertionError("unreachable")

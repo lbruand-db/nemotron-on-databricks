@@ -3,7 +3,14 @@ import pytest
 
 from nemotron_dbx.embed.data import build_retrieval_set
 from nemotron_dbx.embed.metrics import retrieval_metrics
-from nemotron_dbx.embed.server import CARD_SCORES, EMBED_VLLM, PREFIXES, truncate_normalize, vllm_embed_command
+from nemotron_dbx.embed.server import (
+    CARD_SCORES,
+    EMBED_VLLM,
+    PREFIXES,
+    retryable,
+    truncate_normalize,
+    vllm_embed_command,
+)
 from nemotron_dbx.embed.serving import parse_dimensions, parse_records
 from nemotron_dbx.lifecycle.query import build_embed_request, summarize_embeddings
 
@@ -89,3 +96,16 @@ def test_parse_dimensions():
     for bad in (0, -1, 5000, 1.5, True, "abc", None, [1024]):
         with pytest.raises(ValueError):
             parse_dimensions({"dimensions": bad})
+
+
+def test_retryable_only_transient_errors():
+    import requests
+
+    def http(code):
+        r = requests.Response()
+        r.status_code = code
+        return requests.HTTPError(response=r)
+
+    assert retryable(requests.ConnectionError()) and retryable(requests.Timeout())
+    assert retryable(http(503)) and retryable(http(429))
+    assert not retryable(http(400)) and not retryable(http(404)) and not retryable(ValueError())
