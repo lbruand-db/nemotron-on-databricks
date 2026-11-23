@@ -7,6 +7,7 @@ from nemotron_dbx.embed.server import (
     CARD_SCORES,
     EMBED_VLLM,
     PREFIXES,
+    compare_to_card,
     parse_dims_list,
     retryable,
     truncate_normalize,
@@ -117,3 +118,13 @@ def test_parse_dims_list():
     for bad in ("4096,8192", "0", "", "4096,abc"):
         with pytest.raises(ValueError):
             parse_dims_list(bad)
+
+
+def test_compare_to_card():
+    # Orthonormal-ish vectors whose dot products reproduce the card's score matrix exactly.
+    u, sv, vt = np.linalg.svd(CARD_SCORES.astype(np.float64))
+    q = (u * np.sqrt(sv)).astype(np.float32)
+    d = (vt.T * np.sqrt(sv)).astype(np.float32)
+    assert compare_to_card(q, d)["max_abs_err"] < 1e-4
+    with pytest.raises(RuntimeError):
+        compare_to_card(q, d[[1, 0, 2, 3]])  # documents swapped: query 0 no longer ranks its own first

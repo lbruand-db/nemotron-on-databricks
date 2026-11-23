@@ -438,7 +438,7 @@ def register_embed_pyfunc(
     import numpy as np
     import pandas as pd
 
-    from ..embed.server import CARD_DOCUMENTS, CARD_QUERIES, CARD_SCORES, EMBED_VLLM
+    from ..embed.server import CARD_DOCUMENTS, CARD_QUERIES, EMBED_VLLM, compare_to_card
     from ..embed.serving import PYFUNC_PORT, VLLMEmbedModel, model_signature
     from ..embed.serving import SERVING_PARAMS as EMBED_PARAMS
     from ..vlm.vllm_server import with_gpu_budget
@@ -472,13 +472,11 @@ def register_embed_pyfunc(
             model.server.__exit__(None, None, None)
         emb = np.asarray([o["embedding"] for o in out], dtype=np.float32)
         n = len(CARD_QUERIES)
-        scores = emb[:n] @ emb[n:].T
-        max_err = float(np.abs(scores - CARD_SCORES).max())
-        print(f"[register] pyfunc smoke ({time.monotonic() - t0:.0f}s incl. vLLM start): dims {emb.shape[1]}, "
-              f"max |score - card| = {max_err:.4f}, diagonal {np.diag(scores).round(4).tolist()}", flush=True)
-        if max_err > 0.03 or len(small[0]["embedding"]) != 1024:
-            raise RuntimeError(f"Smoke test failed: max_err={max_err:.4f}, 1024-dim output "
-                               f"{len(small[0]['embedding'])}\n{scores.round(4)}")
+        card = compare_to_card(emb[:n], emb[n:])  # same gate as the eval's card_check; raises on mismatch
+        max_err = card["max_abs_err"]
+        print(f"[register] pyfunc smoke ({time.monotonic() - t0:.0f}s incl. vLLM start): {card}", flush=True)
+        if len(small[0]["embedding"]) != 1024:
+            raise RuntimeError(f"Smoke test failed: 1024-dim request returned {len(small[0]['embedding'])} dims")
         signature = model_signature()
 
         reqs = _pip_requirements(extra=("vllm", "transformers", "tokenizers", "safetensors", "requests"),

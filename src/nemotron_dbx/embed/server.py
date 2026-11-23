@@ -143,14 +143,23 @@ def embed_texts(port: int, served_model_name: str, texts: Sequence[str], input_t
     return truncate_normalize(np.asarray(rows, dtype=np.float32), dims)
 
 
-def card_check(port: int, served_model_name: str, tol: float = 0.03) -> dict:
-    """Embed the model card's example and compare with its published scores. Raises if they disagree."""
-    q = embed_texts(port, served_model_name, CARD_QUERIES, "query")
-    d = embed_texts(port, served_model_name, CARD_DOCUMENTS, "document")
-    scores = q @ d.T
+CARD_TOLERANCE = 0.03
+
+
+def compare_to_card(q: np.ndarray, d: np.ndarray, tol: float = CARD_TOLERANCE) -> dict:
+    """The one gate for "vLLM reproduces the model card" (eval and registration): every query/document score
+    within `tol` of the published one, and every query ranking its own document first. Raises otherwise."""
+    scores = np.asarray(q, dtype=np.float32) @ np.asarray(d, dtype=np.float32).T
     max_err = float(np.abs(scores - CARD_SCORES).max())
     result = {"max_abs_err": round(max_err, 4), "dims": int(q.shape[1]),
               "diagonal": [round(float(v), 4) for v in np.diag(scores)]}
     if max_err > tol or not (scores.argmax(axis=1) == np.arange(len(CARD_QUERIES))).all():
         raise RuntimeError(f"Embeddings disagree with the model card (tolerance {tol}): {result}\n{scores.round(4)}")
     return result
+
+
+def card_check(port: int, served_model_name: str, tol: float = CARD_TOLERANCE) -> dict:
+    """Embed the model card's example through the vLLM server, then `compare_to_card`."""
+    q = embed_texts(port, served_model_name, CARD_QUERIES, "query")
+    d = embed_texts(port, served_model_name, CARD_DOCUMENTS, "document")
+    return compare_to_card(q, d, tol)
