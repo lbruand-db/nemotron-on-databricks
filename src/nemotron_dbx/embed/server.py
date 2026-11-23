@@ -8,7 +8,7 @@ queries, `passage: ` for documents. `/v1/embeddings` doesn't add them, so `embed
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -105,8 +105,7 @@ def retryable(exc: Exception) -> bool:
 
 
 def embed_texts(port: int, served_model_name: str, texts: Sequence[str], input_type: str, dims: int | None = None,
-                batch_size: int = 32, concurrency: int = 4, max_tokens: int | None = None,
-                on_batch: Callable[[int], None] | None = None) -> np.ndarray:
+                batch_size: int = 32, concurrency: int = 4, max_tokens: int | None = None) -> np.ndarray:
     """Prefix, embed through `/v1/embeddings` (concurrent batches), then truncate/re-normalize. Row order kept."""
     import requests
 
@@ -125,8 +124,6 @@ def embed_texts(port: int, served_model_name: str, texts: Sequence[str], input_t
                 r = requests.post(url, json=body, timeout=600)
                 r.raise_for_status()
                 data = sorted(r.json()["data"], key=lambda d: d["index"])
-                if on_batch:
-                    on_batch(len(batch))
                 return [d["embedding"] for d in data]
             except requests.RequestException as exc:
                 if attempt == 2 or not retryable(exc):
