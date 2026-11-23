@@ -40,7 +40,7 @@ class Params:
 
 def main() -> None:
     from nemotron_dbx.embed.data import ALLOPROF, load_alloprof
-    from nemotron_dbx.embed.metrics import retrieval_metrics
+    from nemotron_dbx.embed.metrics import retrieval_metrics, top_k_indices
     from nemotron_dbx.embed.server import (
         EMBED_VLLM,
         card_check,
@@ -98,17 +98,20 @@ def main() -> None:
           f"({metrics['queries_per_s']}/s)", flush=True)
 
     results = {}
-    for d in dims:
+    top = None  # top-10 at the largest size, reused for predictions.json (no second matmul or full sort)
+    for d in sorted(dims, reverse=True):
         q, c = truncate_normalize(query_emb, d), truncate_normalize(doc_emb, d)
-        m = retrieval_metrics(q @ c.T, ds.relevant)
+        scores = q @ c.T
+        m = retrieval_metrics(scores, ds.relevant)
+        if top is None:
+            top, top_dim = top_k_indices(scores, 10), d
         results[d] = m
         metrics |= {f"alloprof/dim{d}/{k.replace('@', '_at_')}": v for k, v in m.items()}
         print(f"[eval] dims {d}: {m}", flush=True)
     mlf.log_metrics(metrics)
 
-    # Per-query ranks at full size, for error analysis.
-    top = np.argsort(-(query_emb @ doc_emb.T), axis=1)[:, :10]
-    preds = [{"query_id": qid, "query": qt, "relevant": [ds.doc_ids[i] for i in sorted(rel)],
+    # Per-query top 10 at the largest evaluated size, for error analysis.
+    preds = [{"query_id": qid, "query": qt, "dims": top_dim, "relevant": [ds.doc_ids[i] for i in sorted(rel)],
               "top10": [ds.doc_ids[i] for i in row]}
              for qid, qt, rel, row in zip(ds.query_ids, ds.queries, ds.relevant, top, strict=True)]
     (out / "predictions.json").write_text(json.dumps(preds, ensure_ascii=False, indent=1))

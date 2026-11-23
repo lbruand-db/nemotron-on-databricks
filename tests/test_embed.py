@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from nemotron_dbx.embed.data import build_retrieval_set
-from nemotron_dbx.embed.metrics import retrieval_metrics
+from nemotron_dbx.embed.metrics import retrieval_metrics, top_k_indices
 from nemotron_dbx.embed.server import (
     CARD_SCORES,
     EMBED_VLLM,
@@ -128,3 +128,10 @@ def test_compare_to_card():
     assert compare_to_card(q, d)["max_abs_err"] < 1e-4
     with pytest.raises(RuntimeError):
         compare_to_card(q, d[[1, 0, 2, 3]])  # documents swapped: query 0 no longer ranks its own first
+
+
+def test_top_k_indices_matches_full_sort():
+    rng = np.random.default_rng(0)
+    scores = rng.standard_normal((20, 500)).astype(np.float32)
+    np.testing.assert_array_equal(top_k_indices(scores, 10), np.argsort(-scores, axis=1)[:, :10])
+    assert top_k_indices(scores[:, :3], 10).shape == (20, 3)

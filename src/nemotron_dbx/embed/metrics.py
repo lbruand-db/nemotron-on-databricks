@@ -5,13 +5,21 @@ from __future__ import annotations
 import numpy as np
 
 
+def top_k_indices(scores: np.ndarray, k: int) -> np.ndarray:
+    """Indices of the k best documents per query, best first: argpartition, then sort only those k."""
+    k = min(k, scores.shape[1])
+    part = np.argpartition(-scores, k - 1, axis=1)[:, :k]
+    order = np.argsort(-np.take_along_axis(scores, part, axis=1), axis=1, kind="stable")
+    return np.take_along_axis(part, order, axis=1)
+
+
 def retrieval_metrics(scores: np.ndarray, relevant: list[set[int]], ks: tuple[int, ...] = (1, 5, 10, 100)) -> dict:
     """NDCG@10, MRR@10 and recall@k. `relevant[i]` holds the relevant document indices of query i."""
     n_q, n_d = scores.shape
     if n_q != len(relevant):
         raise ValueError(f"{n_q} score rows for {len(relevant)} queries")
     depth = min(max(*ks, 10), n_d)
-    top = np.argsort(-scores, axis=1)[:, :depth]
+    top = top_k_indices(scores, depth)
     discounts = 1.0 / np.log2(np.arange(2, 12))
     out = {f"recall@{k}": 0.0 for k in ks} | {"ndcg@10": 0.0, "mrr@10": 0.0}
     for ranked, rel in zip(top, relevant, strict=True):
