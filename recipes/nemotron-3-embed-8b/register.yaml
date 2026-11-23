@@ -1,0 +1,43 @@
+# Stage 2: register nvidia/Nemotron-3-Embed-8B-BF16 as a classic pyfunc (vLLM pooling server in the container).
+# Run from the repo root:
+#   databricks air run -f recipes/nemotron-3-embed-8b/register.yaml --override parameters.source_eval_run_id=<RUN_ID>
+experiment_name: nemotron-3-embed-8b
+
+mlflow_run_name: nemotron-3-embed-8b-register
+
+environment:
+  version: databricks_ai_v6
+
+compute:
+  # Same GPU class as the GPU_MEDIUM (A10G) endpoint, so the smoke test also checks the memory fit.
+  accelerator_type: GPU_1xA10
+  num_accelerators: 1
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../..
+    include_paths:
+      - src
+      - recipes/nemotron-3-embed-8b
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+
+parameters:
+  # Requires USE CATALOG, USE SCHEMA, CREATE MODEL on the target schema.
+  registered_model_name: am_rag_fevm_catalog.nemotron.nemotron_3_embed_8b
+  source_eval_run_id: ""
+  vllm_extra_args: ""
+  vllm_env: ""
+  # On a GPU bigger than the serving one, cap the smoke test (GiB), e.g. 20.2 for an A10G; 0 = no cap.
+  smoke_gpu_budget_gib: 0
+
+max_retries: 0
+timeout_minutes: 90
+
+command: |
+  cd "$CODE_SOURCE_PATH"
+  export PYTHONPATH="$CODE_SOURCE_PATH/src:${PYTHONPATH:-}"
+  python -u recipes/nemotron-3-embed-8b/register.py

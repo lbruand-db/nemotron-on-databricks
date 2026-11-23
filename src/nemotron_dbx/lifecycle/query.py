@@ -5,6 +5,8 @@
     python -m nemotron_dbx.lifecycle.query --endpoint-name nemotron-ocr-v1-ft --params '{"merge_level": "word"}' r.png
     python -m nemotron_dbx.lifecycle.query --endpoint-name nemotron-nano-vl-ft --vlm r1.png r2.png   # Nano VL pyfunc
     python -m nemotron_dbx.lifecycle.query --endpoint-name nemotron-nano-vl-ft --chat receipt.png   # Custom LLM
+    python -m nemotron_dbx.lifecycle.query --endpoint-name nemotron-3-embed-8b --embed --input-type query \
+        --dimensions 1024 "Comment calculer un taux d'intérêt ?"   # embeddings (positional args are texts)
 """
 
 from __future__ import annotations
@@ -36,6 +38,26 @@ def build_vlm_request(paths: list[str], instruction: str | None = None, max_toke
     }
 
 
+def build_embed_request(texts: list[str], input_type: str = "document", dimensions: int = 4096) -> dict:
+    """Nemotron-3-Embed pyfunc (`VLLMEmbedModel`): one record per text."""
+    return {
+        "dataframe_records": [{"text": t, "id": i, "input_type": input_type} for i, t in enumerate(texts)],
+        "params": {"dimensions": dimensions},
+    }
+
+
+def summarize_embeddings(predictions: list[dict]) -> str:
+    """Per text: dims, norm and first values; then the cosine-similarity matrix (vectors are L2-normalized)."""
+    import numpy as np
+
+    emb = np.asarray([p["embedding"] for p in predictions], dtype=np.float32)
+    lines = [f"{p['id']} {p['input_type']} dims={len(p['embedding'])} norm={np.linalg.norm(e):.3f} "
+             f"head={[round(float(v), 4) for v in e[:4]]}" for p, e in zip(predictions, emb, strict=True)]
+    if len(emb) > 1:
+        lines += ["similarity:"] + ["  " + " ".join(f"{v:7.4f}" for v in row) for row in emb @ emb.T]
+    return "\n".join(lines)
+
+
 def build_chat_request(path: str, instruction: str | None = None, max_tokens: int = 1536) -> dict:
     """OpenAI chat request for the Nano VL endpoint: the CORD extraction conversation used in training."""
     from ..vlm.data import INSTRUCTION, VLSample, openai_messages
@@ -55,10 +77,13 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--params", help='JSON params, overrides the detector defaults, e.g. \'{"merge_level": "word"}\'')
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--vlm", action="store_true", help="Nano VL classic pyfunc: one record per image")
+    mode.add_argument("--embed", action="store_true", help="Embedding pyfunc: positional arguments are texts")
     mode.add_argument("--chat", action="store_true",
                       help="Nano VL on Custom LLM Serving: OpenAI chat request with the image (one image)")
     ap.add_argument("--instruction", help="--vlm/--chat: replaces the CORD extraction instruction")
     ap.add_argument("--max-tokens", type=int, default=1536, help="--vlm/--chat")
+    ap.add_argument("--input-type", choices=("query", "document"), default="document", help="--embed")
+    ap.add_argument("--dimensions", type=int, default=4096, help="--embed: truncate + re-normalize, e.g. 1024")
     ap.add_argument("--profile")
     args = ap.parse_args(argv)
     if args.instruction and not (args.vlm or args.chat):
@@ -70,12 +95,16 @@ def main(argv: list[str] | None = None) -> None:
         body = build_chat_request(args.images[0], args.instruction, args.max_tokens)
     elif args.vlm:
         body = build_vlm_request(args.images, args.instruction, args.max_tokens)
+    elif args.embed:
+        body = build_embed_request(args.images, args.input_type, args.dimensions)
     else:
         body = build_request(args.images, args.conf_threshold, json.loads(args.params) if args.params else None)
     resp = client.api_client.do("POST", f"/serving-endpoints/{args.endpoint_name}/invocations", body=body)
     if args.chat and isinstance(resp, dict) and resp.get("choices"):
         print(resp["choices"][0]["message"]["content"])
         print(json.dumps({"usage": resp.get("usage")}), flush=True)
+    elif args.embed and isinstance(resp, dict) and resp.get("predictions"):
+        print(summarize_embeddings(resp["predictions"]))
     else:
         print(json.dumps(resp, indent=2))
 

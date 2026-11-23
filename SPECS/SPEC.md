@@ -314,9 +314,9 @@ NeMo AutoModel has no Nano v2 VL recipe, and Megatron-Bridge has removed support
 - **Alternative: no merge.** Serve the base model with `--enable-lora` and the adapter, if Custom LLM Serving allows passing adapter artifacts (stretch).
 - **Client:** `query_endpoint.py` sends an OpenAI-format chat request with an `image_url` data URL.
 
-### 6.6 Embeddings (TODO, M6: eval + serve, no fine-tuning)
+### 6.6 `recipes/nemotron-3-embed-8b` (M6: eval + serve, no fine-tuning)
 
-Not started. Scope agreed on 2026-11-23: **evaluate and serve** a Nemotron embedding model for indexing the
+Implemented 2026-11-23 (see the M6 row for results). Scope agreed on 2026-11-23: **evaluate and serve** a Nemotron embedding model for indexing the
 extracted content (RAG, search). No fine-tuning in v1, so this recipe breaks the "fine-tune and serve" pattern on
 purpose.
 
@@ -413,7 +413,7 @@ Repo-level:
 | OQ-17 | **`env_pack="databricks_model_serving"` breaks classic pyfunc endpoints.** On T4 the server restarted every ~3 min right after "Downloads completed", with no traceback; on A10G the update was aborted ("endpoint update timed out"). The same model registered with pip requirements was READY on T4 in < 25 min. | Don't use `env_pack` for classic pyfuncs. If needed, raise it with the Model Serving team. |
 | OQ-18 | The Databricks CLI now prints a banner ("Databricks skills are not installed…") on stdout before `-o json` output, which breaks naive JSON parsing. | Tools parse from the first `{`. |
 | OQ-16 | **GPU capacity waits are invisible.** A `GPU_1xH100` run stayed task-`PENDING` ("In run") for 90 min, then `TIMEDOUT`, with no logs, while `air get` reported `RUNNING`. Earlier H100 runs started in seconds. | `tools/air_wait.sh` prints the task life-cycle state. Default small models to A10, and cap `timeout_minutes` on smoke runs. |
-| OQ-19 | Embedding eval set (M6): which held-out, license-clean, French/multilingual retrieval set? Nemotron-3-Embed was trained on MIRACL, MLDR, HotpotQA, NQ, SQuAD and more, so public sets risk contamination. | Open. Prefer QA pairs over cookbook-extracted documents, or the customer's documents. |
+| OQ-19 | Embedding eval set (M6): which held-out, license-clean, French/multilingual retrieval set? Nemotron-3-Embed was trained on MIRACL, MLDR, HotpotQA, NQ, SQuAD and more, so public sets risk contamination. | **v1: Alloprof** (`antoinelb7/alloprof`, MIT on the Hub; the paper's arXiv copyright line says CC BY-NC-SA, so eval-only use, no redistribution). Not in the model's published training list; the list says "e.g." for some sources, so contamination can't be fully excluded. MTEB's repackaged `mteb/AlloprofRetrieval` is CC BY-NC-SA and isn't used. Still open: a set over cookbook-extracted or customer documents. |
 | OQ-13 | Customer data: will the cookbook later be pointed at customer documents (in their own UC volume)? If so, each `prepare_data.py` needs a "bring your own COCO/JSONL" path. | Add a `dataset_source: hf|volume` parameter in v1 |
 
 ---
@@ -428,7 +428,7 @@ Repo-level:
 | M3 ✅ | `ocr-v1` (recognizer fine-tune, serving with the compiled extension) | A10, 8.6 min: **test GT-quad CER 4.95 % → 1.63 %**, word acc 88.5 → 95.3 %, end-to-end BoW F1 0.819 → 0.848. Endpoint `nemotron-ocr-v1-ft` (GPU_SMALL) READY in ~38 min (container build). No custom image. |
 | M4 ✅ | `nano-12b-v2-vl` LoRA → merged → serving | Trained: CORD test field F1 0.39 → 0.86, TED 0.45 → 0.93 (1×H100, 31 min) after patch 11; reproduced on e2-demo (0.38 → 0.86). **Served** on `e2-demo-field-eng` as a classic pyfunc (`VLLMChatModel`, v3) with FP8 weights on `GPU_MEDIUM` (A10G). READY ~57 min after deploy; ~4 s per receipt in the model; 2 held-out receipts give valid JSON with F1 0.86. FP8 eval: F1 0.847, TED 0.910. Custom LLM Serving is still blocked (OQ-5). |
 | M5 | Top-level README, metrics table, optional pipeline demo (§7) | |
-| M6 (TODO) | Embedding model: **eval + serve**, no fine-tuning (§6.6) | Not started. Default candidate `nvidia/Nemotron-3-Embed-8B-BF16` (commercial, OpenMDW-1.1). `nvidia/llama-embed-nemotron-8b` (requested 2026-11-23) is **non-commercial/research only**, so at most a marked comparison. Eval set: OQ-19. |
+| M6 ✅ | `nemotron-3-embed-8b`: **eval + serve**, no fine-tuning (§6.6) | `nvidia/Nemotron-3-Embed-8B-BF16` (commercial, OpenMDW-1.1); `llama-embed-nemotron-8b` left out (non-commercial). On `e2-demo-field-eng`, 1× A10: vLLM pooling reproduces the model card's scores within 0.0007; **Alloprof (French, 1,000 queries / 2,798 pages) NDCG@10 0.565 at 4,096 dims, 0.552 at 2,048, 0.540 at 1,024**; 33.8 pages/s. Registered as a classic pyfunc (v1, smoke within 0.0006 of the card). **Served** on `GPU_MEDIUM` (A10G): READY 34 min after deploy, 3–4 s per request; queries rank their own documents first through the endpoint at 4,096 and 1,024 dims. |
 
 ---
 

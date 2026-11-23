@@ -39,8 +39,9 @@ The handoff between stages is the Volume path plus the training run's MLflow run
 | [nemotron-graphic-elements-v1](https://huggingface.co/nvidia/nemotron-graphic-elements-v1) | Chart titles, axes, legends and labels | YOLOX-L, 54 M | Full fine-tune | Synthetic charts | GPU pyfunc | ✅ [done](recipes/graphic-elements-v1/): synthetic test mAP 0.40 → 0.84 |
 | [nemotron-ocr-v1](https://huggingface.co/nvidia/nemotron-ocr-v1) | OCR: text detection, recognition and reading order | RegNetY detector + Transformer recognizer + relational model, 52 M | Recognizer only | CORD-v2 | GPU pyfunc + C++/CUDA extension | ✅ [done](recipes/ocr-v1/): CER 4.95 % → 1.63 % |
 | [nemotron-nano-12b-v2-vl](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16) | Document visual Q&A and extraction | RADIO + hybrid Mamba-Transformer, 12.6 B | LoRA (HF + PEFT) | CORD-v2 → JSON | vLLM (FP8) in a GPU pyfunc on 1× A10G (Custom LLM Serving blocked, SPEC OQ-5) | ✅ [trained and served](recipes/nano-12b-v2-vl/): field F1 0.39 → 0.86 (FP8: 0.85), ~4 s per receipt |
+| [Nemotron-3-Embed-8B](https://huggingface.co/nvidia/Nemotron-3-Embed-8B-BF16) | Text embeddings for RAG and search (34 languages, French included) | Ministral-3-8B bidirectional encoder, 8 B | None (eval + serve only) | Alloprof (French Q&A), eval only | vLLM (pooling) in a GPU pyfunc on 1× A10G | ✅ [evaluated and served](recipes/nemotron-3-embed-8b/): Alloprof NDCG@10 0.565 (4,096 dims), 0.540 (1,024) |
 
-All five models are under the [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/), which allows commercial use. The datasets are CC-BY-4.0, CDLA-Permissive or synthetic.
+The five document-intelligence models are under the [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/), and Nemotron-3-Embed under OpenMDW-1.1: all allow commercial use. The datasets are CC-BY-4.0, CDLA-Permissive, MIT or synthetic. (NVIDIA's `llama-embed-nemotron-8b` is non-commercial, so it is not included.)
 
 ## Repository layout
 
@@ -55,6 +56,8 @@ src/nemotron_dbx/     shared package, shipped with every workload
   ocr/                OCR recognizer fine-tuning on GT quads, CORD-v2, CER/BoW metrics, serving pyfunc
   vlm/                Nano VL: training deps + remote-code patches, LoRA trainer, shard merge, vLLM eval,
                       serving (classic pyfunc running vLLM, or the Custom LLM Serving placeholder)
+  embed/              Nemotron-3-Embed: vLLM pooling server + client, Alloprof eval set, retrieval metrics,
+                      serving pyfunc
   lifecycle/          register (smoke test + UC), deploy (idempotent endpoint), query
 recipes/<model>/      thin recipes: workload.yaml, register.yaml, train.py, register.py, README.md
 recipes/spikes/       M0 de-risking workloads (vLLM serving, LoRA, OCR build, ...)

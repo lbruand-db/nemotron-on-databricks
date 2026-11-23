@@ -46,6 +46,8 @@ DOCLAYNET_V1_2 = HFSource(
 NEMOTRON_OCR_V1 = HFSource("nvidia/nemotron-ocr-v1", "8657d08d3279f4864002d5fd3fdcd47ad8c96bcb")
 CORD_V2 = HFSource("naver-clova-ix/cord-v2", "7f0115a4b758a71d6473b8d085751692da2fef98", repo_type="dataset")
 NANO_VL_V2 = HFSource("nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16", "ca9543b126e8bf3176916d3d305ccc415f89fd4d")
+# Text embedding model (M6, revision observed on 2026-11-23). OpenMDW-1.1, commercial use.
+NEMOTRON_3_EMBED_8B = HFSource("nvidia/Nemotron-3-Embed-8B-BF16", "d1f2f25730bbd775b99b29185134bc86653bf2d1")
 # Nano VL's config.json references remote code in two other repos without a revision (`repo--module.Class`);
 # `nemotron_dbx.vlm.compat.pin_remote_code` pins them for HF training. vLLM uses its own implementation.
 NANO_VL_V2_REMOTE_CODE = {

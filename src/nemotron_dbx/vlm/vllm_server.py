@@ -92,6 +92,8 @@ class VLLMServer:
     `log_path=None` streams vLLM's output to this process's stdout (Model Serving shows it in the endpoint logs).
     With `reuse_running`, a healthy server already on `port` is reused instead of starting a second one. A file
     lock serialises the check-and-start, in case the serving container runs several workers.
+    `command_builder` builds the vLLM command; the default is the Nano VL chat server (`vllm_command`), the
+    embedding recipe passes `nemotron_dbx.embed.server.vllm_embed_command`.
     """
 
     model: str
@@ -103,6 +105,7 @@ class VLLMServer:
     cwd: str | None = None
     reuse_running: bool = False
     startup_s: float = 0.0
+    command_builder: Callable[..., list[str]] = vllm_command
 
     def healthy(self) -> bool:
         import requests
@@ -126,7 +129,7 @@ class VLLMServer:
             return self._start()
 
     def _start(self) -> VLLMServer:
-        cmd = vllm_command(self.model, self.served_model_name, self.port, self.cfg, python=sys.executable)
+        cmd = self.command_builder(self.model, self.served_model_name, self.port, self.cfg, python=sys.executable)
         print("[vllm] " + " ".join(cmd), flush=True)
         t0 = time.monotonic()
         out = None

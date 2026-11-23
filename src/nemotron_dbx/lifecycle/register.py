@@ -15,7 +15,7 @@ import os
 import shutil
 import tempfile
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -417,3 +417,102 @@ def register_vlm_pyfunc(
                 client.set_tag(source_training_run_id, "nemotron.packaging_run_id", run.info.run_id)
     n_fields = len(out[0]["fields"] or {})
     return RegistrationResult(registered_model_name, str(version.version), info.model_uri, n_fields)
+
+
+def register_embed_pyfunc(
+    model_dir: str | Path,
+    registered_model_name: str,
+    source: str,
+    source_eval_run_id: str | None = None,
+    extra_tags: dict[str, str] | None = None,
+    vllm_extra_args: tuple[str, ...] = (),
+    vllm_env: tuple[str, ...] = (),
+    smoke_gpu_budget_gib: float = 0.0,
+) -> RegistrationResult:
+    """Register Nemotron-3-Embed as a classic pyfunc (`VLLMEmbedModel`, no `env_pack`): vLLM in pooling mode runs
+    inside the serving container. Smoke test: the pyfunc exactly as serving runs it, on the model card's example,
+    whose published query-document scores must be reproduced."""
+    from importlib.metadata import version as pkg_version
+
+    import mlflow
+    import numpy as np
+    import pandas as pd
+    from mlflow.models import infer_signature
+
+    from ..embed.server import CARD_DOCUMENTS, CARD_QUERIES, CARD_SCORES, EMBED_VLLM
+    from ..embed.serving import PYFUNC_PORT, VLLMEmbedModel
+    from ..embed.serving import SERVING_PARAMS as EMBED_PARAMS
+    from ..vlm.vllm_server import with_gpu_budget
+
+    if not os.environ.get("DATABRICKS_ACCELERATOR"):
+        raise RuntimeError("Register from an AI Runtime GPU task: the smoke test starts vLLM.")
+    mlflow.set_registry_uri("databricks-uc")
+    os.environ["MLFLOW_USE_DATABRICKS_SDK_MODEL_ARTIFACTS_REPO_FOR_UC"] = "true"
+    cfg = replace(EMBED_VLLM, extra_args=tuple(vllm_extra_args), env=tuple(vllm_env))
+    with tempfile.TemporaryDirectory(prefix="nemotron-register-embed-") as tmp:
+        def write_config(name: str, vllm_cfg) -> str:
+            path = Path(tmp) / name
+            path.write_text(json.dumps({"port": PYFUNC_PORT, "startup_timeout_s": 1800, "source": source,
+                                        "vllm": asdict(vllm_cfg)}, indent=2))
+            return str(path)
+
+        artifacts = {"model_dir": str(model_dir), "config": write_config("config.json", cfg)}
+        smoke_artifacts = {**artifacts, "config": write_config("smoke_config.json",
+                                                              with_gpu_budget(cfg, smoke_gpu_budget_gib))}
+
+        model = VLLMEmbedModel()
+        t0 = time.monotonic()
+        model.load_context(SimpleNamespace(artifacts=smoke_artifacts))
+        try:
+            records = ([{"id": f"q{i}", "input_type": "query", "text": t} for i, t in enumerate(CARD_QUERIES)]
+                       + [{"id": f"d{i}", "input_type": "document", "text": t} for i, t in enumerate(CARD_DOCUMENTS)])
+            df = pd.DataFrame(records)
+            out = model.predict(None, df, params=EMBED_PARAMS)
+            small = model.predict(None, df.iloc[:1], params={"dimensions": 1024})
+        finally:
+            model.server.__exit__(None, None, None)
+        emb = np.asarray([o["embedding"] for o in out], dtype=np.float32)
+        n = len(CARD_QUERIES)
+        scores = emb[:n] @ emb[n:].T
+        max_err = float(np.abs(scores - CARD_SCORES).max())
+        print(f"[register] pyfunc smoke ({time.monotonic() - t0:.0f}s incl. vLLM start): dims {emb.shape[1]}, "
+              f"max |score - card| = {max_err:.4f}, diagonal {np.diag(scores).round(4).tolist()}", flush=True)
+        if max_err > 0.03 or len(small[0]["embedding"]) != 1024:
+            raise RuntimeError(f"Smoke test failed: max_err={max_err:.4f}, 1024-dim output "
+                               f"{len(small[0]['embedding'])}\n{scores.round(4)}")
+        signature = infer_signature(df, [{"id": "q0", "input_type": "query", "dimensions": 4096,
+                                          "embedding": [0.0]}], params=EMBED_PARAMS)
+
+        reqs = _pip_requirements(extra=("vllm", "transformers", "tokenizers", "safetensors", "requests"),
+                                 exact_torch=True)
+        print(f"[register] vllm {pkg_version('vllm')}; pip requirements: {reqs}", flush=True)
+        run_id = os.environ.get("MLFLOW_RUN_ID")
+        with mlflow.start_run(run_id=run_id) if run_id else mlflow.start_run() as run:
+            t1 = time.monotonic()
+            info = mlflow.pyfunc.log_model(
+                name="model",
+                python_model=VLLMEmbedModel(),
+                artifacts=artifacts,
+                code_paths=[str(package_dir())],
+                signature=signature,
+                pip_requirements=reqs,
+            )
+            version = mlflow.register_model(info.model_uri, registered_model_name)  # no env_pack
+            print(f"[register] logged + registered v{version.version} in {time.monotonic() - t1:.0f}s", flush=True)
+            mlflow.set_tags({
+                "nemotron.spec": "nemotron_3_embed_8b",
+                "nemotron.serving": "pyfunc",
+                "nemotron.base_source": source,
+                "nemotron.registered_model": registered_model_name,
+                "nemotron.registered_version": str(version.version),
+                "nemotron.smoke_max_abs_err": f"{max_err:.4f}",
+                "nemotron.pip_requirements": " | ".join(reqs),
+                **({"nemotron.source_eval_run_id": source_eval_run_id} if source_eval_run_id else {}),
+                **(extra_tags or {}),
+            })
+            if source_eval_run_id:
+                client = mlflow.MlflowClient()
+                client.set_tag(source_eval_run_id, "nemotron.registered_model", registered_model_name)
+                client.set_tag(source_eval_run_id, "nemotron.registered_version", str(version.version))
+                client.set_tag(source_eval_run_id, "nemotron.packaging_run_id", run.info.run_id)
+    return RegistrationResult(registered_model_name, str(version.version), info.model_uri, int(emb.shape[0]))

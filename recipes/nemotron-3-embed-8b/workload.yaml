@@ -1,0 +1,47 @@
+# Stage 1: evaluate nvidia/Nemotron-3-Embed-8B-BF16 (no fine-tuning) with vLLM on a French retrieval set
+# (Alloprof), at 4096 / 2048 / 1024 dims. Run from the repo root:
+#   databricks air run -f recipes/nemotron-3-embed-8b/workload.yaml
+experiment_name: nemotron-3-embed-8b
+
+mlflow_run_name: nemotron-3-embed-8b-eval
+
+environment:
+  version: databricks_ai_v6
+
+compute:
+  # A10 (24 GB, Ampere) is the same GPU class as the GPU_MEDIUM A10G serving instance, so this run also shows the
+  # serving config fits. On H100: --override compute.accelerator_type=GPU_1xH100 and, to keep checking the A10G
+  # fit, --override parameters.gpu_budget_gib=20.2
+  accelerator_type: GPU_1xA10
+  num_accelerators: 1
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../..
+    include_paths:
+      - src
+      - recipes/nemotron-3-embed-8b
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+
+parameters:
+  # Durable outputs (metrics.json, predictions.json). Must be an existing writable Volume directory.
+  output_root: /Volumes/am_rag_fevm_catalog/nemotron/artifacts/nemotron-3-embed-8b
+  n_queries: 1000
+  dims: "4096,2048,1024"
+  batch_size: 32
+  concurrency: 8
+  vllm_extra_args: ""
+  vllm_env: ""
+  gpu_budget_gib: 0
+
+max_retries: 0
+timeout_minutes: 60
+
+command: |
+  cd "$CODE_SOURCE_PATH"
+  export PYTHONPATH="$CODE_SOURCE_PATH/src:${PYTHONPATH:-}"
+  python -u recipes/nemotron-3-embed-8b/evaluate.py
