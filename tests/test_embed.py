@@ -4,7 +4,7 @@ import pytest
 from nemotron_dbx.embed.data import build_retrieval_set
 from nemotron_dbx.embed.metrics import retrieval_metrics
 from nemotron_dbx.embed.server import CARD_SCORES, EMBED_VLLM, PREFIXES, truncate_normalize, vllm_embed_command
-from nemotron_dbx.embed.serving import parse_records
+from nemotron_dbx.embed.serving import parse_dimensions, parse_records
 from nemotron_dbx.lifecycle.query import build_embed_request, summarize_embeddings
 
 
@@ -81,3 +81,11 @@ def test_model_signature_accepts_documented_requests():
     for req in ([{"text": "x"}], [{"text": "x", "id": 3, "input_type": "query"}], [{"text": "x", "id": "d1"}]):
         _enforce_schema(pd.DataFrame(req), sig.inputs)  # text only, integer ids and string ids all pass
     assert sig.params.to_dict() == [{"name": "dimensions", "type": "long", "default": 4096, "shape": None}]
+
+
+def test_parse_dimensions():
+    assert parse_dimensions(None) == 4096 and parse_dimensions({"dimensions": 1024}) == 1024
+    assert parse_dimensions({"dimensions": "2048"}) == 2048 and parse_dimensions({"dimensions": 512.0}) == 512
+    for bad in (0, -1, 5000, 1.5, True, "abc", None, [1024]):
+        with pytest.raises(ValueError):
+            parse_dimensions({"dimensions": bad})

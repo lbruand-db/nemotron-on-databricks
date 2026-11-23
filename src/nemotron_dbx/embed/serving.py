@@ -49,6 +49,22 @@ def parse_records(records: list[dict]) -> list[tuple[Any, str, str]]:
     return out
 
 
+def parse_dimensions(params: dict[str, Any] | None) -> int:
+    """`dimensions` param, validated before any embedding work (a bad value is the caller's error)."""
+    from .server import FULL_DIM
+
+    value = {**SERVING_PARAMS, **(params or {})}["dimensions"]
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        raise ValueError(f"dimensions must be an integer, got {value!r}")
+    try:
+        dims = int(value)
+    except ValueError:
+        raise ValueError(f"dimensions must be an integer, got {value!r}") from None
+    if dims != float(value) or not 0 < dims <= FULL_DIM:
+        raise ValueError(f"dimensions must be an integer in 1..{FULL_DIM}, got {value!r}")
+    return dims
+
+
 def model_signature():
     """Explicit signature. Inferring it from the smoke DataFrame would make `id` and `input_type` required and type
     `id` as a string, so `{"text": ...}` alone or integer ids would be rejected before `predict` runs."""
@@ -78,7 +94,7 @@ class VLLMEmbedModel(PythonModel):
         from ..detection.serving import _records
         from .server import embed_texts
 
-        dims = int({**SERVING_PARAMS, **(params or {})}["dimensions"])
+        dims = parse_dimensions(params)  # before any GPU work
         recs = parse_records(list(_records(model_input)))
         results: list[dict | None] = [None] * len(recs)
         for input_type in ("query", "document"):
